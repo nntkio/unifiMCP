@@ -8,7 +8,7 @@ UnifiMCP provides an interface for AI assistants to interact with UniFi network 
 
 ## Tech Stack
 
-- **Language**: Python 3.10+
+- **Language**: Python 3.10+ (please use the latest stable version of Python)
 - **MCP Framework**: mcp (Python SDK)
 - **Package Manager**: uv (recommended) or pip
 
