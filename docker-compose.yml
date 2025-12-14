@@ -1,0 +1,15 @@
+services:
+  unifi-mcp:
+    build: .
+    image: unifi-mcp:latest
+    container_name: unifi-mcp
+    environment:
+      - UNIFI_HOST=${UNIFI_HOST}
+      - UNIFI_USERNAME=${UNIFI_USERNAME}
+      - UNIFI_PASSWORD=${UNIFI_PASSWORD}
+      - UNIFI_SITE=${UNIFI_SITE:-default}
+      - UNIFI_VERIFY_SSL=${UNIFI_VERIFY_SSL:-false}
+      - UNIFI_IS_UNIFI_OS=${UNIFI_IS_UNIFI_OS:-false}
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
