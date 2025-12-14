@@ -66,6 +66,11 @@ The following environment variables are used:
 - `UNIFI_SITE`: UniFi site name (default: "default")
 - `UNIFI_VERIFY_SSL`: Whether to verify SSL certificates (default: "true")
 
+## Branching Strategy
+
+- `fix/` - Use for bug fixes (e.g., `fix/login-error`, `fix/api-timeout`)
+- `feature/` - Use for new features (e.g., `feature/device-list`, `feature/client-stats`)
+
 ## Git Commit Guidelines
 
 - Before any commit, run all tests (`pytest`) and fix any failures
