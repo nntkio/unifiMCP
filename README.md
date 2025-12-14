@@ -4,6 +4,23 @@ An MCP (Model Context Protocol) server for Ubiquiti UniFi network devices. This 
 
 ## Installation
 
+### Option 1: Docker (Recommended)
+
+```bash
+# Clone the repository
+git clone https://github.com/nntkio/unifiMCP.git
+cd unifiMCP
+
+# Copy and configure environment variables
+cp .env.example .env
+# Edit .env with your UniFi controller details
+
+# Build and run with Docker Compose
+docker compose up -d
+```
+
+### Option 2: Local Installation
+
 ```bash
 # Clone the repository
 git clone https://github.com/nntkio/unifiMCP.git
@@ -58,6 +75,22 @@ export UNIFI_IS_UNIFI_OS="true"
 
 ### Running the Server
 
+**With Docker:**
+```bash
+# Using Docker Compose (recommended)
+docker compose up -d
+
+# Or run directly with Docker
+docker run -it --rm \
+  -e UNIFI_HOST="https://192.168.1.1" \
+  -e UNIFI_USERNAME="admin" \
+  -e UNIFI_PASSWORD="your-password" \
+  -e UNIFI_VERIFY_SSL="false" \
+  -e UNIFI_IS_UNIFI_OS="true" \
+  unifi-mcp:latest
+```
+
+**Without Docker:**
 ```bash
 unifi-mcp
 ```
@@ -66,6 +99,7 @@ unifi-mcp
 
 Add to your Claude Desktop config file (`~/.config/claude/claude_desktop_config.json` on Linux or `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 
+**Local installation:**
 ```json
 {
   "mcpServers": {
@@ -78,6 +112,25 @@ Add to your Claude Desktop config file (`~/.config/claude/claude_desktop_config.
         "UNIFI_VERIFY_SSL": "false",
         "UNIFI_IS_UNIFI_OS": "true"
       }
+    }
+  }
+}
+```
+
+**With Docker:**
+```json
+{
+  "mcpServers": {
+    "unifi": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm",
+        "-e", "UNIFI_HOST=https://192.168.1.1",
+        "-e", "UNIFI_USERNAME=admin",
+        "-e", "UNIFI_PASSWORD=your-password",
+        "-e", "UNIFI_VERIFY_SSL=false",
+        "-e", "UNIFI_IS_UNIFI_OS=true",
+        "unifi-mcp:latest"
+      ]
     }
   }
 }
