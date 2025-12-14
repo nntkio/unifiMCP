@@ -8,10 +8,12 @@ from unifi_mcp.server import (
     call_tool,
     format_bytes,
     format_clients,
+    format_device_activity,
     format_devices,
     format_health,
     format_networks,
     format_sites,
+    format_uptime,
     list_tools,
 )
 
@@ -34,6 +36,7 @@ class TestListTools:
         assert "get_sites" in tool_names
         assert "get_site_health" in tool_names
         assert "get_networks" in tool_names
+        assert "get_device_activity" in tool_names
 
     @pytest.mark.asyncio
     async def test_tools_have_descriptions(self) -> None:
@@ -137,6 +140,50 @@ class TestCallTool:
             assert len(result) == 1
             assert "blocked" in result[0].text
             mock_client.block_client.assert_called_once_with("aa:bb:cc:dd:ee:ff")
+
+    @pytest.mark.asyncio
+    async def test_call_get_device_activity(self) -> None:
+        """Test calling get_device_activity tool."""
+        with patch("unifi_mcp.server.UniFiClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.get_device_activity = AsyncMock(
+                return_value={
+                    "device": {
+                        "name": "Living Room AP",
+                        "mac": "aa:bb:cc:dd:ee:ff",
+                        "model": "UAP-AC-Pro",
+                        "type": "uap",
+                        "state": 1,
+                    },
+                    "clients": [
+                        {
+                            "hostname": "laptop",
+                            "mac": "11:22:33:44:55:66",
+                            "ip": "192.168.1.50",
+                            "is_wired": False,
+                            "essid": "MyNetwork",
+                            "tx_bytes": 1024,
+                            "rx_bytes": 2048,
+                        }
+                    ],
+                    "client_count": 1,
+                    "total_tx_bytes": 1024,
+                    "total_rx_bytes": 2048,
+                }
+            )
+            mock_client_class.return_value.__aenter__ = AsyncMock(
+                return_value=mock_client
+            )
+            mock_client_class.return_value.__aexit__ = AsyncMock()
+
+            result = await call_tool(
+                "get_device_activity", {"mac": "aa:bb:cc:dd:ee:ff"}
+            )
+
+            assert len(result) == 1
+            assert "Living Room AP" in result[0].text
+            assert "laptop" in result[0].text
+            assert "Connected Clients: 1" in result[0].text
 
 
 class TestFormatters:
@@ -252,3 +299,66 @@ class TestFormatters:
         assert "LAN" in result
         assert "corporate" in result
         assert "192.168.1.0/24" in result
+
+    def test_format_uptime_seconds(self) -> None:
+        """Test formatting uptime in seconds."""
+        assert format_uptime(45) == "45s"
+
+    def test_format_uptime_minutes(self) -> None:
+        """Test formatting uptime in minutes."""
+        assert format_uptime(125) == "2m 5s"
+
+    def test_format_uptime_hours(self) -> None:
+        """Test formatting uptime in hours."""
+        assert format_uptime(3665) == "1h 1m 5s"
+
+    def test_format_uptime_days(self) -> None:
+        """Test formatting uptime in days."""
+        assert format_uptime(90065) == "1d 1h 1m 5s"
+
+    def test_format_device_activity_no_device(self) -> None:
+        """Test formatting device activity when device not found."""
+        activity = {
+            "device": None,
+            "clients": [],
+            "client_count": 0,
+            "total_tx_bytes": 0,
+            "total_rx_bytes": 0,
+        }
+        result = format_device_activity(activity)
+        assert "Device: Not found" in result
+        assert "Connected Clients: 0" in result
+
+    def test_format_device_activity_with_clients(self) -> None:
+        """Test formatting device activity with connected clients."""
+        activity = {
+            "device": {
+                "name": "Office AP",
+                "mac": "aa:bb:cc:dd:ee:ff",
+                "model": "UAP-AC-Pro",
+                "type": "uap",
+                "state": 1,
+            },
+            "clients": [
+                {
+                    "hostname": "laptop",
+                    "mac": "11:22:33:44:55:66",
+                    "ip": "192.168.1.50",
+                    "is_wired": False,
+                    "essid": "MyNetwork",
+                    "tx_bytes": 1024,
+                    "rx_bytes": 2048,
+                    "signal": -65,
+                    "uptime": 3600,
+                }
+            ],
+            "client_count": 1,
+            "total_tx_bytes": 1024,
+            "total_rx_bytes": 2048,
+        }
+        result = format_device_activity(activity)
+        assert "Office AP" in result
+        assert "Connected Clients: 1" in result
+        assert "laptop" in result
+        assert "Signal: -65 dBm" in result
+        assert "1h" in result

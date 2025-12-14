@@ -313,3 +313,74 @@ class UniFiClient:
             List of DPI statistics.
         """
         return await self._request("GET", "/api/s/{site}/stat/dpi")
+
+    async def get_client_dpi_stats(self) -> list[dict[str, Any]]:
+        """Get per-client deep packet inspection statistics.
+
+        Returns:
+            List of per-client DPI statistics.
+        """
+        return await self._request("GET", "/api/s/{site}/stat/stadpi")
+
+    # Device Activity
+    async def get_device_clients(self, device_mac: str) -> list[dict[str, Any]]:
+        """Get clients connected to a specific device (AP or switch).
+
+        Args:
+            device_mac: MAC address of the device.
+
+        Returns:
+            List of client dictionaries connected to this device.
+        """
+        all_clients = await self.get_clients()
+        device_mac_lower = device_mac.lower().replace(":", "").replace("-", "")
+
+        connected_clients = []
+        for client in all_clients:
+            # Check if client is connected to this AP (wireless)
+            ap_mac = client.get("ap_mac", "").lower().replace(":", "")
+            # Check if client is connected to this switch (wired)
+            sw_mac = client.get("sw_mac", "").lower().replace(":", "")
+
+            if device_mac_lower == ap_mac or device_mac_lower == sw_mac:
+                connected_clients.append(client)
+
+        return connected_clients
+
+    async def get_device_activity(self, device_mac: str) -> dict[str, Any]:
+        """Get activity summary for a specific device.
+
+        This includes the device info, connected clients, and their traffic.
+
+        Args:
+            device_mac: MAC address of the device.
+
+        Returns:
+            Dictionary with device info and connected clients.
+        """
+        # Get device info
+        device = await self.get_device(device_mac)
+        if not device:
+            # Try getting from all devices
+            devices = await self.get_devices()
+            device_mac_lower = device_mac.lower().replace(":", "").replace("-", "")
+            for d in devices:
+                d_mac = d.get("mac", "").lower().replace(":", "")
+                if d_mac == device_mac_lower:
+                    device = d
+                    break
+
+        # Get clients connected to this device
+        clients = await self.get_device_clients(device_mac)
+
+        # Calculate totals
+        total_tx = sum(c.get("tx_bytes", 0) for c in clients)
+        total_rx = sum(c.get("rx_bytes", 0) for c in clients)
+
+        return {
+            "device": device,
+            "clients": clients,
+            "client_count": len(clients),
+            "total_tx_bytes": total_tx,
+            "total_rx_bytes": total_rx,
+        }

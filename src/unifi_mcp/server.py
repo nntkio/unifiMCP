@@ -127,6 +127,21 @@ async def list_tools() -> list[Tool]:
                 "required": [],
             },
         ),
+        # Activity tools
+        Tool(
+            name="get_device_activity",
+            description="Get activity for a specific device including connected clients and their traffic",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "mac": {
+                        "type": "string",
+                        "description": "MAC address of the device (AP or switch)",
+                    }
+                },
+                "required": ["mac"],
+            },
+        ),
     ]
 
 
@@ -210,6 +225,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 case "get_networks":
                     networks = await client.get_networks()
                     return [TextContent(type="text", text=format_networks(networks))]
+
+                # Activity tools
+                case "get_device_activity":
+                    mac = arguments.get("mac", "")
+                    activity = await client.get_device_activity(mac)
+                    return [
+                        TextContent(type="text", text=format_device_activity(activity))
+                    ]
 
                 case _:
                     return [TextContent(type="text", text=f"Unknown tool: {name}")]
@@ -365,6 +388,95 @@ def format_bytes(bytes_val: int) -> str:
             return f"{bytes_val:.1f} {unit}"
         bytes_val /= 1024
     return f"{bytes_val:.1f} PB"
+
+
+def format_device_activity(activity: dict[str, Any]) -> str:
+    """Format device activity for display."""
+    lines = []
+
+    device = activity.get("device")
+    clients = activity.get("clients", [])
+    client_count = activity.get("client_count", 0)
+    total_tx = activity.get("total_tx_bytes", 0)
+    total_rx = activity.get("total_rx_bytes", 0)
+
+    # Device info
+    if device:
+        name = device.get("name", "Unknown")
+        mac = device.get("mac", "Unknown")
+        model = device.get("model", "Unknown")
+        device_type = device.get("type", "Unknown")
+        state = device.get("state", 0)
+        state_str = "Online" if state == 1 else "Offline"
+
+        lines.append(f"Device: {name}")
+        lines.append(f"  MAC: {mac}")
+        lines.append(f"  Model: {model} ({device_type})")
+        lines.append(f"  Status: {state_str}")
+        lines.append("")
+    else:
+        lines.append("Device: Not found")
+        lines.append("")
+
+    # Summary
+    lines.append(f"Connected Clients: {client_count}")
+    lines.append(
+        f"Total Traffic: TX {format_bytes(total_tx)} / RX {format_bytes(total_rx)}"
+    )
+    lines.append("")
+
+    # Client details
+    if clients:
+        lines.append("Client Activity:")
+        for c in clients:
+            hostname = c.get("hostname") or c.get("name") or "Unknown"
+            client_mac = c.get("mac", "Unknown")
+            ip = c.get("ip", "N/A")
+            is_wired = c.get("is_wired", False)
+            conn_type = "Wired" if is_wired else "Wireless"
+            essid = c.get("essid", "")
+            tx_bytes = c.get("tx_bytes", 0)
+            rx_bytes = c.get("rx_bytes", 0)
+            signal = c.get("signal", None)
+            uptime = c.get("uptime", 0)
+
+            lines.append(f"  - {hostname}")
+            lines.append(f"    MAC: {client_mac}")
+            lines.append(f"    IP: {ip}")
+            lines.append(f"    Connection: {conn_type}")
+            if essid:
+                lines.append(f"    SSID: {essid}")
+            if signal is not None:
+                lines.append(f"    Signal: {signal} dBm")
+            if uptime > 0:
+                lines.append(f"    Uptime: {format_uptime(uptime)}")
+            lines.append(
+                f"    Traffic: TX {format_bytes(tx_bytes)} / RX {format_bytes(rx_bytes)}"
+            )
+            lines.append("")
+    else:
+        lines.append("No clients currently connected to this device.")
+
+    return "\n".join(lines)
+
+
+def format_uptime(seconds: int) -> str:
+    """Format uptime in seconds to human-readable format."""
+    days, remainder = divmod(seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, secs = divmod(remainder, 60)
+
+    parts = []
+    if days > 0:
+        parts.append(f"{days}d")
+    if hours > 0:
+        parts.append(f"{hours}h")
+    if minutes > 0:
+        parts.append(f"{minutes}m")
+    if secs > 0 or not parts:
+        parts.append(f"{secs}s")
+
+    return " ".join(parts)
 
 
 def main() -> None:
