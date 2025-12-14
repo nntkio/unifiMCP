@@ -65,3 +65,8 @@ The following environment variables are used:
 - `UNIFI_PASSWORD`: UniFi Controller password
 - `UNIFI_SITE`: UniFi site name (default: "default")
 - `UNIFI_VERIFY_SSL`: Whether to verify SSL certificates (default: "true")
+
+## Git Commit Guidelines
+
+- Changes to `.md` files can be committed directly to the current branch
+- For any other file changes, please ask the user before committing
