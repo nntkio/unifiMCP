@@ -37,6 +37,8 @@ src/
     resources/       # MCP resources definitions
 tests/
   test_*.py          # Test files
+docs/
+  *.md               # Documentation files
 ```
 
 ## Code Style
@@ -76,3 +78,4 @@ The following environment variables are used:
 - Before any commit, run all tests (`pytest`) and fix any failures
 - Changes to `.md` files can be committed directly to the current branch
 - For any other file changes, please ask the user before committing
+- All new markdown files should be added to the `docs/` directory
