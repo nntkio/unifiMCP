@@ -68,5 +68,6 @@ The following environment variables are used:
 
 ## Git Commit Guidelines
 
+- Before any commit, run all tests (`pytest`) and fix any failures
 - Changes to `.md` files can be committed directly to the current branch
 - For any other file changes, please ask the user before committing
