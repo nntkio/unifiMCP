@@ -19,6 +19,11 @@ cp .env.example .env
 docker compose up -d
 ```
 
+Credentials are only ever supplied at container **run time** (via `.env`,
+loaded through `env_file` in `docker-compose.yml`) — they are never passed as
+build arguments or baked into the image, so the image is safe to share or
+push to a registry without leaking your controller password.
+
 ### Option 2: Local Installation
 
 ```bash
