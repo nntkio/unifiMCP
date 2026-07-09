@@ -2,6 +2,10 @@
 
 An MCP (Model Context Protocol) server for Ubiquiti UniFi network devices. This allows AI assistants to interact with UniFi network infrastructure for monitoring, device management, and configuration tasks.
 
+> For the full configuration and usage guide — including how to connect this
+> to Claude Code and Claude Desktop, a complete tool reference, and
+> troubleshooting — see [`docs/usage-guide.md`](docs/usage-guide.md).
+
 ## Installation
 
 ### Option 1: Docker (Recommended)
