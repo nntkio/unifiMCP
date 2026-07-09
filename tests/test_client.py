@@ -329,3 +329,96 @@ class TestUniFiClientMethods:
 
         assert len(result) == 2
         mock_client._request.assert_called_once_with("GET", "/api/s/{site}/stat/health")
+
+    @pytest.mark.asyncio
+    async def test_get_firewall_rules(self, mock_client: UniFiClient) -> None:
+        """Test get_firewall_rules method."""
+        mock_client._request.return_value = [{"name": "Block WAN"}]
+
+        result = await mock_client.get_firewall_rules()
+
+        assert len(result) == 1
+        mock_client._request.assert_called_once_with(
+            "GET", "/api/s/{site}/rest/firewallrule"
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_firewall_rules_zone_based_migrated(
+        self, mock_client: UniFiClient
+    ) -> None:
+        """Test get_firewall_rules returns [] when the console has migrated to zone-based firewall."""
+        mock_client._request.side_effect = UniFiError("api.err.InvalidObject")
+
+        result = await mock_client.get_firewall_rules()
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_set_firewall_rule_enabled(self, mock_client: UniFiClient) -> None:
+        """Test set_firewall_rule_enabled enables a rule found by ID."""
+        mock_client.get_firewall_rules = AsyncMock(
+            return_value=[
+                {"_id": "rule1", "name": "Block WAN", "enabled": False},
+                {"_id": "rule2", "name": "Allow LAN", "enabled": True},
+            ]
+        )
+
+        result = await mock_client.set_firewall_rule_enabled("rule1", True)
+
+        assert result is True
+        mock_client._request.assert_called_once_with(
+            "PUT",
+            "/api/s/{site}/rest/firewallrule/rule1",
+            json={"_id": "rule1", "name": "Block WAN", "enabled": True},
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_firewall_rule_enabled_not_found(
+        self, mock_client: UniFiClient
+    ) -> None:
+        """Test set_firewall_rule_enabled raises when the rule ID doesn't exist."""
+        mock_client.get_firewall_rules = AsyncMock(return_value=[])
+
+        with pytest.raises(UniFiError, match="Firewall rule not found"):
+            await mock_client.set_firewall_rule_enabled("missing", True)
+
+    @pytest.mark.asyncio
+    async def test_get_firewall_policies(self, mock_client: UniFiClient) -> None:
+        """Test get_firewall_policies method."""
+        mock_client._request_v2 = AsyncMock(
+            return_value=[{"_id": "policy1", "name": "Block Guest to LAN"}]
+        )
+
+        result = await mock_client.get_firewall_policies()
+
+        assert len(result) == 1
+        mock_client._request_v2.assert_called_once_with("GET", "/firewall-policies")
+
+    @pytest.mark.asyncio
+    async def test_set_firewall_policy_enabled(self, mock_client: UniFiClient) -> None:
+        """Test set_firewall_policy_enabled enables a policy found by ID."""
+        mock_client.get_firewall_policies = AsyncMock(
+            return_value=[
+                {"_id": "policy1", "name": "Block Guest to LAN", "enabled": False},
+            ]
+        )
+        mock_client._request_v2 = AsyncMock()
+
+        result = await mock_client.set_firewall_policy_enabled("policy1", True)
+
+        assert result is True
+        mock_client._request_v2.assert_called_once_with(
+            "PUT",
+            "/firewall-policies/policy1",
+            json={"_id": "policy1", "name": "Block Guest to LAN", "enabled": True},
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_firewall_policy_enabled_not_found(
+        self, mock_client: UniFiClient
+    ) -> None:
+        """Test set_firewall_policy_enabled raises when the policy ID doesn't exist."""
+        mock_client.get_firewall_policies = AsyncMock(return_value=[])
+
+        with pytest.raises(UniFiError, match="Firewall policy not found"):
+            await mock_client.set_firewall_policy_enabled("missing", True)

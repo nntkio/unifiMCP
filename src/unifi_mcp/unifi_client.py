@@ -86,6 +86,22 @@ class UniFiClient:
         endpoint = endpoint.replace("{site}", self.site)
         return f"{self._api_prefix}{endpoint}"
 
+    def _v2_api_url(self, endpoint: str) -> str:
+        """Build the full v2 API URL for an endpoint.
+
+        The v2 API backs newer features (e.g. zone-based firewall policies)
+        and lives under a different path prefix than the classic API.
+
+        Args:
+            endpoint: The v2 API endpoint, relative to the site
+                (e.g. "/firewall-policies").
+
+        Returns:
+            The full URL with proper prefixing for UniFi OS if needed.
+        """
+        prefix = "/proxy/network" if self.is_unifi_os else ""
+        return f"{prefix}/v2/api/site/{self.site}{endpoint}"
+
     async def connect(self) -> "UniFiClient":
         """Open the underlying HTTP client and log in."""
         self._client = httpx.AsyncClient(
@@ -116,6 +132,11 @@ class UniFiClient:
             raise RuntimeError("Client not initialized")
 
         try:
+            # A stale session cookie on the client causes UniFi OS consoles to
+            # reject a fresh login with 403, so clear it before every attempt
+            # (this matters for the re-login-on-expired-session retry path).
+            self._client.cookies.clear()
+
             # UniFi OS uses a different login endpoint
             login_url = "/api/auth/login" if self.is_unifi_os else "/api/login"
             response = await self._client.post(
@@ -184,6 +205,54 @@ class UniFiClient:
                 raise UniFiError(meta.get("msg", "Unknown API error"))
 
             return data.get("data", [])
+        except httpx.HTTPStatusError as e:
+            raise UniFiError(f"Request failed: {e}") from e
+
+    async def _request_v2(
+        self,
+        method: str,
+        endpoint: str,
+        json: dict[str, Any] | None = None,
+        _retry_on_expired_session: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Make a v2 API request.
+
+        The v2 API (used by zone-based firewall policies, traffic rules,
+        etc.) returns a bare JSON array/object instead of the classic API's
+        `{"meta": ..., "data": [...]}` envelope, and reports errors via an
+        `errorCode` field rather than `meta.rc == "error"`, so it needs its
+        own response handling.
+
+        Args:
+            method: HTTP method
+            endpoint: v2 API endpoint, relative to the site
+            json: JSON body for POST/PUT requests
+            _retry_on_expired_session: Re-login and retry once on a 401
+
+        Returns:
+            The response data, always as a list.
+
+        Raises:
+            UniFiError: If the request fails.
+        """
+        if not self._client:
+            raise RuntimeError("Client not initialized")
+
+        url = self._v2_api_url(endpoint)
+        try:
+            response = await self._client.request(method, url, json=json)
+            if response.status_code == 401 and _retry_on_expired_session:
+                await self.login()
+                return await self._request_v2(
+                    method, endpoint, json=json, _retry_on_expired_session=False
+                )
+            response.raise_for_status()
+            data = response.json()
+
+            if isinstance(data, dict) and "errorCode" in data:
+                raise UniFiError(data.get("message", "Unknown API error"))
+
+            return data if isinstance(data, list) else [data]
         except httpx.HTTPStatusError as e:
             raise UniFiError(f"Request failed: {e}") from e
 
@@ -324,6 +393,89 @@ class UniFiClient:
             List of network configuration dictionaries.
         """
         return await self._request("GET", "/api/s/{site}/rest/networkconf")
+
+    # Firewall Rules (legacy)
+    async def get_firewall_rules(self) -> list[dict[str, Any]]:
+        """Get all legacy custom firewall rules.
+
+        Consoles that have migrated to the newer zone-based firewall (see
+        `get_firewall_policies`) reject this endpoint with
+        `api.err.InvalidObject` instead of returning an empty list; that
+        specific error is treated as "no legacy rules" rather than raised.
+
+        Returns:
+            List of firewall rule dictionaries.
+        """
+        try:
+            return await self._request("GET", "/api/s/{site}/rest/firewallrule")
+        except UniFiError as e:
+            if "InvalidObject" in str(e):
+                return []
+            raise
+
+    async def set_firewall_rule_enabled(self, rule_id: str, enabled: bool) -> bool:
+        """Enable or disable a legacy firewall rule.
+
+        The controller's REST endpoint replaces the whole rule object on PUT,
+        so the current rule is fetched first and only the `enabled` field is
+        changed before writing it back.
+
+        Args:
+            rule_id: Firewall rule ID (`_id`).
+            enabled: Whether the rule should be active.
+
+        Returns:
+            True if the update was sent successfully.
+
+        Raises:
+            UniFiError: If no rule with that ID exists.
+        """
+        rules = await self.get_firewall_rules()
+        rule = next((r for r in rules if r.get("_id") == rule_id), None)
+        if rule is None:
+            raise UniFiError(f"Firewall rule not found: {rule_id}")
+
+        rule["enabled"] = enabled
+        await self._request(
+            "PUT", "/api/s/{site}/rest/firewallrule/" + rule_id, json=rule
+        )
+        return True
+
+    # Firewall Policies (zone-based firewall, UniFi Network 8.0+)
+    async def get_firewall_policies(self) -> list[dict[str, Any]]:
+        """Get all zone-based firewall policies.
+
+        Includes both predefined (built-in) and custom policies.
+
+        Returns:
+            List of firewall policy dictionaries.
+        """
+        return await self._request_v2("GET", "/firewall-policies")
+
+    async def set_firewall_policy_enabled(self, policy_id: str, enabled: bool) -> bool:
+        """Enable or disable a zone-based firewall policy.
+
+        Predefined (built-in) policies can't be modified by the controller,
+        only ones you've created.
+
+        Args:
+            policy_id: Firewall policy ID (`_id`).
+            enabled: Whether the policy should be active.
+
+        Returns:
+            True if the update was sent successfully.
+
+        Raises:
+            UniFiError: If no policy with that ID exists.
+        """
+        policies = await self.get_firewall_policies()
+        policy = next((p for p in policies if p.get("_id") == policy_id), None)
+        if policy is None:
+            raise UniFiError(f"Firewall policy not found: {policy_id}")
+
+        policy["enabled"] = enabled
+        await self._request_v2("PUT", "/firewall-policies/" + policy_id, json=policy)
+        return True
 
     # Device Activity
     async def get_device_clients(self, device_mac: str) -> list[dict[str, Any]]:
