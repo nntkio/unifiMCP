@@ -194,6 +194,43 @@ class TestUniFiClientRequest:
         assert result[0]["name"] == "device1"
 
     @pytest.mark.asyncio
+    async def test_request_relogs_in_on_expired_session(self) -> None:
+        """Test that a 401 triggers exactly one re-login and retry."""
+        client = UniFiClient(
+            host="https://unifi.local",
+            username="admin",
+            password="pass",
+        )
+
+        unauthorized_response = MagicMock()
+        unauthorized_response.status_code = 401
+
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        ok_response.raise_for_status = MagicMock()
+        ok_response.json = MagicMock(
+            return_value={"meta": {"rc": "ok"}, "data": [{"name": "device1"}]}
+        )
+
+        mock_http_client = AsyncMock()
+        mock_http_client.request = AsyncMock(
+            side_effect=[unauthorized_response, ok_response]
+        )
+        mock_http_client.post = AsyncMock(
+            return_value=MagicMock(raise_for_status=MagicMock())
+        )
+        client._client = mock_http_client
+
+        result = await client._request("GET", "/api/s/{site}/stat/device")
+
+        assert result == [{"name": "device1"}]
+        assert mock_http_client.request.call_count == 2
+        mock_http_client.post.assert_called_once_with(
+            "/api/login",
+            json={"username": "admin", "password": "pass"},
+        )
+
+    @pytest.mark.asyncio
     async def test_request_api_error(self) -> None:
         """Test API-level error handling."""
         client = UniFiClient(
