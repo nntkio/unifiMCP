@@ -1,147 +1,230 @@
 """MCP server implementation for UniFi."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from unifi_mcp.unifi_client import UniFiClient, UniFiError
+from unifi_mcp.unifi_client import (
+    UniFiAuthenticationError,
+    UniFiClient,
+    UniFiConnectionError,
+    UniFiError,
+)
 
 # Create the MCP server instance
 server = Server("unifi-mcp")
+
+# A single authenticated client is reused across tool calls instead of
+# logging in and out on every call; _request() re-logs-in once on a 401
+# if the session has expired.
+_client: UniFiClient | None = None
+_client_lock = asyncio.Lock()
+
+
+async def _get_client() -> UniFiClient:
+    """Get the shared authenticated UniFi client, connecting it on first use."""
+    global _client
+    async with _client_lock:
+        if _client is None:
+            _client = await UniFiClient().connect()
+    return _client
+
+
+async def _close_client() -> None:
+    """Close the shared UniFi client, if one was ever opened."""
+    global _client
+    if _client is not None:
+        await _client.close()
+        _client = None
+
+
+# Tool handlers
+async def _handle_get_devices(client: UniFiClient, arguments: dict[str, Any]) -> str:
+    return format_devices(await client.get_devices())
+
+
+async def _handle_restart_device(client: UniFiClient, arguments: dict[str, Any]) -> str:
+    mac = arguments.get("mac", "")
+    await client.restart_device(mac)
+    return f"Restart command sent to device {mac}"
+
+
+async def _handle_get_clients(client: UniFiClient, arguments: dict[str, Any]) -> str:
+    if arguments.get("include_offline", False):
+        clients = await client.get_all_clients()
+    else:
+        clients = await client.get_clients()
+    return format_clients(clients)
+
+
+async def _handle_block_client(client: UniFiClient, arguments: dict[str, Any]) -> str:
+    mac = arguments.get("mac", "")
+    await client.block_client(mac)
+    return f"Client {mac} has been blocked from the network."
+
+
+async def _handle_unblock_client(client: UniFiClient, arguments: dict[str, Any]) -> str:
+    mac = arguments.get("mac", "")
+    await client.unblock_client(mac)
+    return f"Client {mac} has been unblocked."
+
+
+async def _handle_disconnect_client(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    mac = arguments.get("mac", "")
+    await client.disconnect_client(mac)
+    return f"Client {mac} has been disconnected."
+
+
+async def _handle_get_sites(client: UniFiClient, arguments: dict[str, Any]) -> str:
+    return format_sites(await client.get_sites())
+
+
+async def _handle_get_site_health(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    return format_health(await client.get_site_health())
+
+
+async def _handle_get_networks(client: UniFiClient, arguments: dict[str, Any]) -> str:
+    return format_networks(await client.get_networks())
+
+
+async def _handle_get_device_activity(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    mac = arguments.get("mac", "")
+    return format_device_activity(await client.get_device_activity(mac))
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    """Declarative definition of an MCP tool: its schema and its handler."""
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+    handler: Callable[[UniFiClient, dict[str, Any]], Awaitable[str]]
+
+
+_MAC_PROPERTY = {
+    "type": "string",
+    "description": "MAC address of the target (e.g., '00:11:22:33:44:55')",
+}
+
+TOOLS: list[ToolSpec] = [
+    ToolSpec(
+        name="get_devices",
+        description="Get all UniFi network devices (access points, switches, gateways)",
+        input_schema={"type": "object", "properties": {}, "required": []},
+        handler=_handle_get_devices,
+    ),
+    ToolSpec(
+        name="restart_device",
+        description="Restart a UniFi network device by its MAC address",
+        input_schema={
+            "type": "object",
+            "properties": {"mac": _MAC_PROPERTY},
+            "required": ["mac"],
+        },
+        handler=_handle_restart_device,
+    ),
+    ToolSpec(
+        name="get_clients",
+        description="Get all currently connected clients on the UniFi network",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "include_offline": {
+                    "type": "boolean",
+                    "description": "Include offline/historical clients",
+                    "default": False,
+                }
+            },
+            "required": [],
+        },
+        handler=_handle_get_clients,
+    ),
+    ToolSpec(
+        name="block_client",
+        description="Block a client from accessing the network",
+        input_schema={
+            "type": "object",
+            "properties": {"mac": _MAC_PROPERTY},
+            "required": ["mac"],
+        },
+        handler=_handle_block_client,
+    ),
+    ToolSpec(
+        name="unblock_client",
+        description="Unblock a previously blocked client",
+        input_schema={
+            "type": "object",
+            "properties": {"mac": _MAC_PROPERTY},
+            "required": ["mac"],
+        },
+        handler=_handle_unblock_client,
+    ),
+    ToolSpec(
+        name="disconnect_client",
+        description="Force disconnect a client from the network",
+        input_schema={
+            "type": "object",
+            "properties": {"mac": _MAC_PROPERTY},
+            "required": ["mac"],
+        },
+        handler=_handle_disconnect_client,
+    ),
+    ToolSpec(
+        name="get_sites",
+        description="Get all UniFi sites configured on the controller",
+        input_schema={"type": "object", "properties": {}, "required": []},
+        handler=_handle_get_sites,
+    ),
+    ToolSpec(
+        name="get_site_health",
+        description="Get health status for the current site",
+        input_schema={"type": "object", "properties": {}, "required": []},
+        handler=_handle_get_site_health,
+    ),
+    ToolSpec(
+        name="get_networks",
+        description="Get all network configurations for the current site",
+        input_schema={"type": "object", "properties": {}, "required": []},
+        handler=_handle_get_networks,
+    ),
+    ToolSpec(
+        name="get_device_activity",
+        description="Get activity for a specific device including connected clients and their traffic",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "mac": {
+                    "type": "string",
+                    "description": "MAC address of the device (AP or switch)",
+                }
+            },
+            "required": ["mac"],
+        },
+        handler=_handle_get_device_activity,
+    ),
+]
+
+_TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
 
 
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List all available UniFi MCP tools."""
     return [
-        # Device tools
-        Tool(
-            name="get_devices",
-            description="Get all UniFi network devices (access points, switches, gateways)",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        ),
-        Tool(
-            name="restart_device",
-            description="Restart a UniFi network device by its MAC address",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "mac": {
-                        "type": "string",
-                        "description": "MAC address of the device to restart (e.g., '00:11:22:33:44:55')",
-                    }
-                },
-                "required": ["mac"],
-            },
-        ),
-        # Client tools
-        Tool(
-            name="get_clients",
-            description="Get all currently connected clients on the UniFi network",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "include_offline": {
-                        "type": "boolean",
-                        "description": "Include offline/historical clients",
-                        "default": False,
-                    }
-                },
-                "required": [],
-            },
-        ),
-        Tool(
-            name="block_client",
-            description="Block a client from accessing the network",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "mac": {
-                        "type": "string",
-                        "description": "MAC address of the client to block",
-                    }
-                },
-                "required": ["mac"],
-            },
-        ),
-        Tool(
-            name="unblock_client",
-            description="Unblock a previously blocked client",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "mac": {
-                        "type": "string",
-                        "description": "MAC address of the client to unblock",
-                    }
-                },
-                "required": ["mac"],
-            },
-        ),
-        Tool(
-            name="disconnect_client",
-            description="Force disconnect a client from the network",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "mac": {
-                        "type": "string",
-                        "description": "MAC address of the client to disconnect",
-                    }
-                },
-                "required": ["mac"],
-            },
-        ),
-        # Site tools
-        Tool(
-            name="get_sites",
-            description="Get all UniFi sites configured on the controller",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        ),
-        Tool(
-            name="get_site_health",
-            description="Get health status for the current site",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        ),
-        Tool(
-            name="get_networks",
-            description="Get all network configurations for the current site",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        ),
-        # Activity tools
-        Tool(
-            name="get_device_activity",
-            description="Get activity for a specific device including connected clients and their traffic",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "mac": {
-                        "type": "string",
-                        "description": "MAC address of the device (AP or switch)",
-                    }
-                },
-                "required": ["mac"],
-            },
-        ),
+        Tool(name=t.name, description=t.description, inputSchema=t.input_schema)
+        for t in TOOLS
     ]
 
 
@@ -156,87 +239,28 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     Returns:
         List of text content with the result.
     """
+    tool = _TOOLS_BY_NAME.get(name)
+    if tool is None:
+        return [TextContent(type="text", text=f"Unknown tool: {name}")]
+
     try:
-        async with UniFiClient() as client:
-            match name:
-                # Device tools
-                case "get_devices":
-                    devices = await client.get_devices()
-                    return [TextContent(type="text", text=format_devices(devices))]
-
-                case "restart_device":
-                    mac = arguments.get("mac", "")
-                    await client.restart_device(mac)
-                    return [
-                        TextContent(
-                            type="text",
-                            text=f"Restart command sent to device {mac}",
-                        )
-                    ]
-
-                # Client tools
-                case "get_clients":
-                    include_offline = arguments.get("include_offline", False)
-                    if include_offline:
-                        clients = await client.get_all_clients()
-                    else:
-                        clients = await client.get_clients()
-                    return [TextContent(type="text", text=format_clients(clients))]
-
-                case "block_client":
-                    mac = arguments.get("mac", "")
-                    await client.block_client(mac)
-                    return [
-                        TextContent(
-                            type="text",
-                            text=f"Client {mac} has been blocked from the network.",
-                        )
-                    ]
-
-                case "unblock_client":
-                    mac = arguments.get("mac", "")
-                    await client.unblock_client(mac)
-                    return [
-                        TextContent(
-                            type="text",
-                            text=f"Client {mac} has been unblocked.",
-                        )
-                    ]
-
-                case "disconnect_client":
-                    mac = arguments.get("mac", "")
-                    await client.disconnect_client(mac)
-                    return [
-                        TextContent(
-                            type="text",
-                            text=f"Client {mac} has been disconnected.",
-                        )
-                    ]
-
-                # Site tools
-                case "get_sites":
-                    sites = await client.get_sites()
-                    return [TextContent(type="text", text=format_sites(sites))]
-
-                case "get_site_health":
-                    health = await client.get_site_health()
-                    return [TextContent(type="text", text=format_health(health))]
-
-                case "get_networks":
-                    networks = await client.get_networks()
-                    return [TextContent(type="text", text=format_networks(networks))]
-
-                # Activity tools
-                case "get_device_activity":
-                    mac = arguments.get("mac", "")
-                    activity = await client.get_device_activity(mac)
-                    return [
-                        TextContent(type="text", text=format_device_activity(activity))
-                    ]
-
-                case _:
-                    return [TextContent(type="text", text=f"Unknown tool: {name}")]
-
+        client = await _get_client()
+        text = await tool.handler(client, arguments)
+        return [TextContent(type="text", text=text)]
+    except UniFiAuthenticationError as e:
+        return [
+            TextContent(
+                type="text",
+                text=f"Authentication failed: {e}. Check UNIFI_USERNAME and UNIFI_PASSWORD.",
+            )
+        ]
+    except UniFiConnectionError as e:
+        return [
+            TextContent(
+                type="text",
+                text=f"Connection failed: {e}. Check UNIFI_HOST and network connectivity.",
+            )
+        ]
     except UniFiError as e:
         return [TextContent(type="text", text=f"Error: {e}")]
     except Exception as e:
@@ -244,6 +268,57 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
 
 # Formatting helpers
+def _format_device_status_lines(
+    device: dict[str, Any], indent: str = "  "
+) -> list[str]:
+    """Format the MAC/model/status lines shared by device summaries."""
+    mac = device.get("mac", "Unknown")
+    model = device.get("model", "Unknown")
+    device_type = device.get("type", "Unknown")
+    state_str = "Online" if device.get("state", 0) == 1 else "Offline"
+
+    return [
+        f"{indent}MAC: {mac}",
+        f"{indent}Model: {model} ({device_type})",
+        f"{indent}Status: {state_str}",
+    ]
+
+
+def _format_client_lines(
+    client: dict[str, Any],
+    bullet_indent: str = "",
+    detail_indent: str = "  ",
+    include_signal_uptime: bool = False,
+) -> list[str]:
+    """Format a single client's detail block, shared by client and activity views."""
+    hostname = client.get("hostname") or client.get("name") or "Unknown"
+    mac = client.get("mac", "Unknown")
+    ip = client.get("ip", "N/A")
+    conn_type = "Wired" if client.get("is_wired", False) else "Wireless"
+    essid = client.get("essid", "")
+    tx_bytes = client.get("tx_bytes", 0)
+    rx_bytes = client.get("rx_bytes", 0)
+
+    lines = [f"{bullet_indent}- {hostname}"]
+    lines.append(f"{detail_indent}MAC: {mac}")
+    lines.append(f"{detail_indent}IP: {ip}")
+    lines.append(f"{detail_indent}Connection: {conn_type}")
+    if essid:
+        lines.append(f"{detail_indent}SSID: {essid}")
+    if include_signal_uptime:
+        signal = client.get("signal")
+        uptime = client.get("uptime", 0)
+        if signal is not None:
+            lines.append(f"{detail_indent}Signal: {signal} dBm")
+        if uptime > 0:
+            lines.append(f"{detail_indent}Uptime: {format_uptime(uptime)}")
+    lines.append(
+        f"{detail_indent}Traffic: TX {format_bytes(tx_bytes)} / RX {format_bytes(rx_bytes)}"
+    )
+    lines.append("")
+    return lines
+
+
 def format_devices(devices: list[dict[str, Any]]) -> str:
     """Format device list for display."""
     if not devices:
@@ -253,18 +328,11 @@ def format_devices(devices: list[dict[str, Any]]) -> str:
 
     for device in devices:
         name = device.get("name", "Unknown")
-        mac = device.get("mac", "Unknown")
-        model = device.get("model", "Unknown")
-        device_type = device.get("type", "Unknown")
-        state = device.get("state", 0)
-        state_str = "Online" if state == 1 else "Offline"
         ip = device.get("ip", "N/A")
         version = device.get("version", "N/A")
 
         lines.append(f"- {name}")
-        lines.append(f"  MAC: {mac}")
-        lines.append(f"  Model: {model} ({device_type})")
-        lines.append(f"  Status: {state_str}")
+        lines.extend(_format_device_status_lines(device))
         lines.append(f"  IP: {ip}")
         lines.append(f"  Firmware: {version}")
         lines.append("")
@@ -278,27 +346,8 @@ def format_clients(clients: list[dict[str, Any]]) -> str:
         return "No clients found."
 
     lines = [f"Found {len(clients)} client(s):\n"]
-
-    for c in clients:
-        hostname = c.get("hostname") or c.get("name") or "Unknown"
-        mac = c.get("mac", "Unknown")
-        ip = c.get("ip", "N/A")
-        is_wired = c.get("is_wired", False)
-        conn_type = "Wired" if is_wired else "Wireless"
-        essid = c.get("essid", "")
-        tx_bytes = c.get("tx_bytes", 0)
-        rx_bytes = c.get("rx_bytes", 0)
-
-        lines.append(f"- {hostname}")
-        lines.append(f"  MAC: {mac}")
-        lines.append(f"  IP: {ip}")
-        lines.append(f"  Connection: {conn_type}")
-        if essid:
-            lines.append(f"  SSID: {essid}")
-        lines.append(
-            f"  Traffic: TX {format_bytes(tx_bytes)} / RX {format_bytes(rx_bytes)}"
-        )
-        lines.append("")
+    for client in clients:
+        lines.extend(_format_client_lines(client))
 
     return "\n".join(lines)
 
@@ -323,6 +372,20 @@ def format_sites(sites: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+# Subsystem-specific health fields: (json field, label, default) per subsystem type.
+_SUBSYSTEM_HEALTH_FIELDS: dict[str, list[tuple[str, str, Any]]] = {
+    "wan": [("gw_mac", "Gateway", "N/A")],
+    "wlan": [
+        ("num_ap", "Access Points", 0),
+        ("num_user", "Wireless Clients", 0),
+    ],
+    "lan": [
+        ("num_sw", "Switches", 0),
+        ("num_user", "Wired Clients", 0),
+    ],
+}
+
+
 def format_health(health: list[dict[str, Any]]) -> str:
     """Format health data for display."""
     if not health:
@@ -337,19 +400,8 @@ def format_health(health: list[dict[str, Any]]) -> str:
         lines.append(f"- {subsys_name.upper()}")
         lines.append(f"  Status: {status}")
 
-        if subsys_name == "wan":
-            gateways = subsystem.get("gw_mac", "N/A")
-            lines.append(f"  Gateway: {gateways}")
-        elif subsys_name == "wlan":
-            num_ap = subsystem.get("num_ap", 0)
-            num_user = subsystem.get("num_user", 0)
-            lines.append(f"  Access Points: {num_ap}")
-            lines.append(f"  Wireless Clients: {num_user}")
-        elif subsys_name == "lan":
-            num_sw = subsystem.get("num_sw", 0)
-            num_user = subsystem.get("num_user", 0)
-            lines.append(f"  Switches: {num_sw}")
-            lines.append(f"  Wired Clients: {num_user}")
+        for field, label, default in _SUBSYSTEM_HEALTH_FIELDS.get(subsys_name, []):
+            lines.append(f"  {label}: {subsystem.get(field, default)}")
 
         lines.append("")
 
@@ -403,16 +455,8 @@ def format_device_activity(activity: dict[str, Any]) -> str:
     # Device info
     if device:
         name = device.get("name", "Unknown")
-        mac = device.get("mac", "Unknown")
-        model = device.get("model", "Unknown")
-        device_type = device.get("type", "Unknown")
-        state = device.get("state", 0)
-        state_str = "Online" if state == 1 else "Offline"
-
         lines.append(f"Device: {name}")
-        lines.append(f"  MAC: {mac}")
-        lines.append(f"  Model: {model} ({device_type})")
-        lines.append(f"  Status: {state_str}")
+        lines.extend(_format_device_status_lines(device))
         lines.append("")
     else:
         lines.append("Device: Not found")
@@ -428,32 +472,15 @@ def format_device_activity(activity: dict[str, Any]) -> str:
     # Client details
     if clients:
         lines.append("Client Activity:")
-        for c in clients:
-            hostname = c.get("hostname") or c.get("name") or "Unknown"
-            client_mac = c.get("mac", "Unknown")
-            ip = c.get("ip", "N/A")
-            is_wired = c.get("is_wired", False)
-            conn_type = "Wired" if is_wired else "Wireless"
-            essid = c.get("essid", "")
-            tx_bytes = c.get("tx_bytes", 0)
-            rx_bytes = c.get("rx_bytes", 0)
-            signal = c.get("signal", None)
-            uptime = c.get("uptime", 0)
-
-            lines.append(f"  - {hostname}")
-            lines.append(f"    MAC: {client_mac}")
-            lines.append(f"    IP: {ip}")
-            lines.append(f"    Connection: {conn_type}")
-            if essid:
-                lines.append(f"    SSID: {essid}")
-            if signal is not None:
-                lines.append(f"    Signal: {signal} dBm")
-            if uptime > 0:
-                lines.append(f"    Uptime: {format_uptime(uptime)}")
-            lines.append(
-                f"    Traffic: TX {format_bytes(tx_bytes)} / RX {format_bytes(rx_bytes)}"
+        for client in clients:
+            lines.extend(
+                _format_client_lines(
+                    client,
+                    bullet_indent="  ",
+                    detail_indent="    ",
+                    include_signal_uptime=True,
+                )
             )
-            lines.append("")
     else:
         lines.append("No clients currently connected to this device.")
 
@@ -484,11 +511,14 @@ def main() -> None:
 
     async def run() -> None:
         async with stdio_server() as (read_stream, write_stream):
-            await server.run(
-                read_stream,
-                write_stream,
-                server.create_initialization_options(),
-            )
+            try:
+                await server.run(
+                    read_stream,
+                    write_stream,
+                    server.create_initialization_options(),
+                )
+            finally:
+                await _close_client()
 
     asyncio.run(run())
 

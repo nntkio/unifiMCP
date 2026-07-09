@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from unifi_mcp import server as server_module
 from unifi_mcp.server import (
     call_tool,
     format_bytes,
@@ -49,141 +50,158 @@ class TestListTools:
 
 
 class TestCallTool:
-    """Tests for call_tool function."""
+    """Tests for call_tool function.
+
+    call_tool() fetches its UniFiClient via the shared `_get_client()`
+    accessor (a persistent, lazily-connected client reused across calls)
+    rather than opening a new connection per call, so tests patch
+    `_get_client` directly instead of the `UniFiClient` class.
+    """
 
     @pytest.mark.asyncio
     async def test_call_unknown_tool(self) -> None:
         """Test calling an unknown tool."""
-        with patch("unifi_mcp.server.UniFiClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client_class.return_value.__aenter__ = AsyncMock(
-                return_value=mock_client
-            )
-            mock_client_class.return_value.__aexit__ = AsyncMock()
+        result = await call_tool("unknown_tool", {})
 
-            result = await call_tool("unknown_tool", {})
-
-            assert len(result) == 1
-            assert "Unknown tool" in result[0].text
+        assert len(result) == 1
+        assert "Unknown tool" in result[0].text
 
     @pytest.mark.asyncio
     async def test_call_get_devices(self) -> None:
         """Test calling get_devices tool."""
-        with patch("unifi_mcp.server.UniFiClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.get_devices = AsyncMock(
-                return_value=[
-                    {
-                        "name": "Living Room AP",
-                        "mac": "aa:bb:cc:dd:ee:ff",
-                        "model": "UAP-AC-Pro",
-                        "type": "uap",
-                        "state": 1,
-                        "ip": "192.168.1.10",
-                        "version": "6.0.0",
-                    }
-                ]
-            )
-            mock_client_class.return_value.__aenter__ = AsyncMock(
-                return_value=mock_client
-            )
-            mock_client_class.return_value.__aexit__ = AsyncMock()
-
+        mock_client = AsyncMock()
+        mock_client.get_devices = AsyncMock(
+            return_value=[
+                {
+                    "name": "Living Room AP",
+                    "mac": "aa:bb:cc:dd:ee:ff",
+                    "model": "UAP-AC-Pro",
+                    "type": "uap",
+                    "state": 1,
+                    "ip": "192.168.1.10",
+                    "version": "6.0.0",
+                }
+            ]
+        )
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
             result = await call_tool("get_devices", {})
 
-            assert len(result) == 1
-            assert "Living Room AP" in result[0].text
-            assert "aa:bb:cc:dd:ee:ff" in result[0].text
+        assert len(result) == 1
+        assert "Living Room AP" in result[0].text
+        assert "aa:bb:cc:dd:ee:ff" in result[0].text
 
     @pytest.mark.asyncio
     async def test_call_get_clients(self) -> None:
         """Test calling get_clients tool."""
-        with patch("unifi_mcp.server.UniFiClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.get_clients = AsyncMock(
-                return_value=[
-                    {
-                        "hostname": "my-laptop",
-                        "mac": "11:22:33:44:55:66",
-                        "ip": "192.168.1.100",
-                        "is_wired": False,
-                        "essid": "MyNetwork",
-                        "tx_bytes": 1024000,
-                        "rx_bytes": 2048000,
-                    }
-                ]
-            )
-            mock_client_class.return_value.__aenter__ = AsyncMock(
-                return_value=mock_client
-            )
-            mock_client_class.return_value.__aexit__ = AsyncMock()
-
+        mock_client = AsyncMock()
+        mock_client.get_clients = AsyncMock(
+            return_value=[
+                {
+                    "hostname": "my-laptop",
+                    "mac": "11:22:33:44:55:66",
+                    "ip": "192.168.1.100",
+                    "is_wired": False,
+                    "essid": "MyNetwork",
+                    "tx_bytes": 1024000,
+                    "rx_bytes": 2048000,
+                }
+            ]
+        )
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
             result = await call_tool("get_clients", {})
 
-            assert len(result) == 1
-            assert "my-laptop" in result[0].text
-            assert "192.168.1.100" in result[0].text
+        assert len(result) == 1
+        assert "my-laptop" in result[0].text
+        assert "192.168.1.100" in result[0].text
 
     @pytest.mark.asyncio
     async def test_call_block_client(self) -> None:
         """Test calling block_client tool."""
-        with patch("unifi_mcp.server.UniFiClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.block_client = AsyncMock()
-            mock_client_class.return_value.__aenter__ = AsyncMock(
-                return_value=mock_client
-            )
-            mock_client_class.return_value.__aexit__ = AsyncMock()
-
+        mock_client = AsyncMock()
+        mock_client.block_client = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
             result = await call_tool("block_client", {"mac": "aa:bb:cc:dd:ee:ff"})
 
-            assert len(result) == 1
-            assert "blocked" in result[0].text
-            mock_client.block_client.assert_called_once_with("aa:bb:cc:dd:ee:ff")
+        assert len(result) == 1
+        assert "blocked" in result[0].text
+        mock_client.block_client.assert_called_once_with("aa:bb:cc:dd:ee:ff")
 
     @pytest.mark.asyncio
     async def test_call_get_device_activity(self) -> None:
         """Test calling get_device_activity tool."""
-        with patch("unifi_mcp.server.UniFiClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.get_device_activity = AsyncMock(
-                return_value={
-                    "device": {
-                        "name": "Living Room AP",
-                        "mac": "aa:bb:cc:dd:ee:ff",
-                        "model": "UAP-AC-Pro",
-                        "type": "uap",
-                        "state": 1,
-                    },
-                    "clients": [
-                        {
-                            "hostname": "laptop",
-                            "mac": "11:22:33:44:55:66",
-                            "ip": "192.168.1.50",
-                            "is_wired": False,
-                            "essid": "MyNetwork",
-                            "tx_bytes": 1024,
-                            "rx_bytes": 2048,
-                        }
-                    ],
-                    "client_count": 1,
-                    "total_tx_bytes": 1024,
-                    "total_rx_bytes": 2048,
-                }
-            )
-            mock_client_class.return_value.__aenter__ = AsyncMock(
-                return_value=mock_client
-            )
-            mock_client_class.return_value.__aexit__ = AsyncMock()
-
+        mock_client = AsyncMock()
+        mock_client.get_device_activity = AsyncMock(
+            return_value={
+                "device": {
+                    "name": "Living Room AP",
+                    "mac": "aa:bb:cc:dd:ee:ff",
+                    "model": "UAP-AC-Pro",
+                    "type": "uap",
+                    "state": 1,
+                },
+                "clients": [
+                    {
+                        "hostname": "laptop",
+                        "mac": "11:22:33:44:55:66",
+                        "ip": "192.168.1.50",
+                        "is_wired": False,
+                        "essid": "MyNetwork",
+                        "tx_bytes": 1024,
+                        "rx_bytes": 2048,
+                    }
+                ],
+                "client_count": 1,
+                "total_tx_bytes": 1024,
+                "total_rx_bytes": 2048,
+            }
+        )
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
             result = await call_tool(
                 "get_device_activity", {"mac": "aa:bb:cc:dd:ee:ff"}
             )
 
-            assert len(result) == 1
-            assert "Living Room AP" in result[0].text
-            assert "laptop" in result[0].text
-            assert "Connected Clients: 1" in result[0].text
+        assert len(result) == 1
+        assert "Living Room AP" in result[0].text
+        assert "laptop" in result[0].text
+        assert "Connected Clients: 1" in result[0].text
+
+
+class TestClientLifecycle:
+    """Tests for the shared client's connect-once/reuse/close behavior."""
+
+    def teardown_method(self) -> None:
+        """Ensure the module-level singleton doesn't leak into other tests."""
+        server_module._client = None
+
+    @pytest.mark.asyncio
+    async def test_get_client_reuses_connection(self) -> None:
+        """Test that repeated _get_client() calls connect only once."""
+        with patch("unifi_mcp.server.UniFiClient") as mock_client_class:
+            mock_instance = AsyncMock()
+            mock_client_class.return_value.connect = AsyncMock(
+                return_value=mock_instance
+            )
+
+            first = await server_module._get_client()
+            second = await server_module._get_client()
+
+            assert first is second
+            mock_client_class.return_value.connect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_close_client_resets_singleton(self) -> None:
+        """Test that _close_client() closes the connection and clears state."""
+        with patch("unifi_mcp.server.UniFiClient") as mock_client_class:
+            mock_instance = AsyncMock()
+            mock_client_class.return_value.connect = AsyncMock(
+                return_value=mock_instance
+            )
+
+            await server_module._get_client()
+            await server_module._close_client()
+
+            mock_instance.close.assert_called_once()
+            assert server_module._client is None
 
 
 class TestFormatters:

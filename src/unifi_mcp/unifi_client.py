@@ -1,5 +1,6 @@
 """UniFi API client for communicating with UniFi Controller."""
 
+import asyncio
 import os
 from typing import Any
 
@@ -22,6 +23,18 @@ class UniFiConnectionError(UniFiError):
     """Raised when connection to controller fails."""
 
     pass
+
+
+def _normalize_mac(mac: str) -> str:
+    """Normalize a MAC address for case/format-insensitive comparison."""
+    return mac.lower().replace(":", "").replace("-", "")
+
+
+def _env_bool(name: str, default: str, override: bool | None) -> bool:
+    """Resolve a boolean setting from an explicit override or an environment variable."""
+    if override is not None:
+        return override
+    return os.environ.get(name, default).lower() == "true"
 
 
 class UniFiClient:
@@ -50,16 +63,8 @@ class UniFiClient:
         self.username = username or os.environ.get("UNIFI_USERNAME", "")
         self.password = password or os.environ.get("UNIFI_PASSWORD", "")
         self.site = site or os.environ.get("UNIFI_SITE", "default")
-        self.verify_ssl = (
-            verify_ssl
-            if verify_ssl is not None
-            else os.environ.get("UNIFI_VERIFY_SSL", "true").lower() == "true"
-        )
-        self.is_unifi_os = (
-            is_unifi_os
-            if is_unifi_os is not None
-            else os.environ.get("UNIFI_IS_UNIFI_OS", "false").lower() == "true"
-        )
+        self.verify_ssl = _env_bool("UNIFI_VERIFY_SSL", "true", verify_ssl)
+        self.is_unifi_os = _env_bool("UNIFI_IS_UNIFI_OS", "false", is_unifi_os)
         self._client: httpx.AsyncClient | None = None
         self._logged_in: bool = False
 
@@ -81,8 +86,8 @@ class UniFiClient:
         endpoint = endpoint.replace("{site}", self.site)
         return f"{self._api_prefix}{endpoint}"
 
-    async def __aenter__(self) -> "UniFiClient":
-        """Enter async context."""
+    async def connect(self) -> "UniFiClient":
+        """Open the underlying HTTP client and log in."""
         self._client = httpx.AsyncClient(
             base_url=self.host,
             verify=self.verify_ssl,
@@ -91,11 +96,19 @@ class UniFiClient:
         await self.login()
         return self
 
-    async def __aexit__(self, *args: object) -> None:
-        """Exit async context."""
+    async def close(self) -> None:
+        """Log out and close the underlying HTTP client."""
         if self._client:
             await self.logout()
             await self._client.aclose()
+
+    async def __aenter__(self) -> "UniFiClient":
+        """Enter async context."""
+        return await self.connect()
+
+    async def __aexit__(self, *args: object) -> None:
+        """Exit async context."""
+        await self.close()
 
     async def login(self) -> None:
         """Authenticate with the UniFi Controller."""
@@ -133,6 +146,7 @@ class UniFiClient:
         method: str,
         endpoint: str,
         json: dict[str, Any] | None = None,
+        _retry_on_expired_session: bool = True,
     ) -> list[dict[str, Any]]:
         """Make an API request.
 
@@ -140,6 +154,9 @@ class UniFiClient:
             method: HTTP method
             endpoint: API endpoint
             json: JSON body for POST/PUT requests
+            _retry_on_expired_session: Re-login and retry once on a 401,
+                since a long-lived client's session cookie can expire
+                between requests.
 
         Returns:
             The data array from the response.
@@ -153,6 +170,11 @@ class UniFiClient:
         url = self._api_url(endpoint)
         try:
             response = await self._client.request(method, url, json=json)
+            if response.status_code == 401 and _retry_on_expired_session:
+                await self.login()
+                return await self._request(
+                    method, endpoint, json=json, _retry_on_expired_session=False
+                )
             response.raise_for_status()
             data = response.json()
 
@@ -177,6 +199,9 @@ class UniFiClient:
     async def get_device(self, mac: str) -> dict[str, Any] | None:
         """Get a specific device by MAC address.
 
+        Falls back to scanning the full device list if the single-device
+        endpoint returns nothing, so callers can rely on a single lookup.
+
         Args:
             mac: Device MAC address.
 
@@ -184,7 +209,14 @@ class UniFiClient:
             Device dictionary or None if not found.
         """
         devices = await self._request("GET", "/api/s/{site}/stat/device/" + mac)
-        return devices[0] if devices else None
+        if devices:
+            return devices[0]
+
+        mac_normalized = _normalize_mac(mac)
+        for device in await self.get_devices():
+            if _normalize_mac(device.get("mac", "")) == mac_normalized:
+                return device
+        return None
 
     async def restart_device(self, mac: str) -> bool:
         """Restart a network device.
@@ -218,18 +250,6 @@ class UniFiClient:
             List of client dictionaries.
         """
         return await self._request("GET", "/api/s/{site}/stat/alluser")
-
-    async def get_client(self, mac: str) -> dict[str, Any] | None:
-        """Get a specific client by MAC address.
-
-        Args:
-            mac: Client MAC address.
-
-        Returns:
-            Client dictionary or None if not found.
-        """
-        clients = await self._request("GET", "/api/s/{site}/stat/user/" + mac)
-        return clients[0] if clients else None
 
     async def block_client(self, mac: str) -> bool:
         """Block a client from the network.
@@ -305,23 +325,6 @@ class UniFiClient:
         """
         return await self._request("GET", "/api/s/{site}/rest/networkconf")
 
-    # Statistics
-    async def get_dpi_stats(self) -> list[dict[str, Any]]:
-        """Get deep packet inspection statistics.
-
-        Returns:
-            List of DPI statistics.
-        """
-        return await self._request("GET", "/api/s/{site}/stat/dpi")
-
-    async def get_client_dpi_stats(self) -> list[dict[str, Any]]:
-        """Get per-client deep packet inspection statistics.
-
-        Returns:
-            List of per-client DPI statistics.
-        """
-        return await self._request("GET", "/api/s/{site}/stat/stadpi")
-
     # Device Activity
     async def get_device_clients(self, device_mac: str) -> list[dict[str, Any]]:
         """Get clients connected to a specific device (AP or switch).
@@ -333,16 +336,15 @@ class UniFiClient:
             List of client dictionaries connected to this device.
         """
         all_clients = await self.get_clients()
-        device_mac_lower = device_mac.lower().replace(":", "").replace("-", "")
+        device_mac_normalized = _normalize_mac(device_mac)
 
         connected_clients = []
         for client in all_clients:
-            # Check if client is connected to this AP (wireless)
-            ap_mac = client.get("ap_mac", "").lower().replace(":", "")
-            # Check if client is connected to this switch (wired)
-            sw_mac = client.get("sw_mac", "").lower().replace(":", "")
+            # Check if client is connected to this AP (wireless) or switch (wired)
+            ap_mac = _normalize_mac(client.get("ap_mac", ""))
+            sw_mac = _normalize_mac(client.get("sw_mac", ""))
 
-            if device_mac_lower == ap_mac or device_mac_lower == sw_mac:
+            if device_mac_normalized in (ap_mac, sw_mac):
                 connected_clients.append(client)
 
         return connected_clients
@@ -358,22 +360,10 @@ class UniFiClient:
         Returns:
             Dictionary with device info and connected clients.
         """
-        # Get device info
-        device = await self.get_device(device_mac)
-        if not device:
-            # Try getting from all devices
-            devices = await self.get_devices()
-            device_mac_lower = device_mac.lower().replace(":", "").replace("-", "")
-            for d in devices:
-                d_mac = d.get("mac", "").lower().replace(":", "")
-                if d_mac == device_mac_lower:
-                    device = d
-                    break
+        device, clients = await asyncio.gather(
+            self.get_device(device_mac), self.get_device_clients(device_mac)
+        )
 
-        # Get clients connected to this device
-        clients = await self.get_device_clients(device_mac)
-
-        # Calculate totals
         total_tx = sum(c.get("tx_bytes", 0) for c in clients)
         total_rx = sum(c.get("rx_bytes", 0) for c in clients)
 
