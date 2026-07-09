@@ -208,6 +208,64 @@ Or, to run it via Docker instead of a local venv:
 
 Restart Claude Desktop after editing the config.
 
+### Keeping credentials out of the client config
+
+The examples above put `UNIFI_USERNAME`/`UNIFI_PASSWORD` directly in
+`claude_desktop_config.json` (or in shell history via `claude mcp add -e`).
+That file often gets synced, backed up, or screenshotted for troubleshooting,
+so it's worth keeping secrets out of it. Instead, point the client at a
+wrapper script that loads credentials from `.env` at launch:
+
+```bash
+#!/usr/bin/env bash
+# scripts/run-mcp.sh
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+ENV_FILE="$REPO_ROOT/.env"
+
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  source "$ENV_FILE"
+  set +a
+fi
+
+exec "$REPO_ROOT/.venv/bin/unifi-mcp"
+```
+
+This script already ships in the repo at `scripts/run-mcp.sh` (make sure it's
+executable: `chmod +x scripts/run-mcp.sh`). Point your client at it with no
+`env` block at all:
+
+```json
+{
+  "mcpServers": {
+    "unifi": {
+      "command": "/absolute/path/to/unifiMCP/scripts/run-mcp.sh"
+    }
+  }
+}
+```
+
+For Claude Code, the equivalent is:
+
+```bash
+claude mcp add unifi -- /absolute/path/to/unifiMCP/scripts/run-mcp.sh
+```
+
+Credentials then live in exactly one place — `.env`, which is gitignored and
+should be `chmod 600` (`chmod 600 .env`) so only your user account can read
+it — instead of being duplicated into the MCP client's config.
+
+For stronger protection than a plaintext `.env` file (e.g. the password
+shouldn't be readable by anything with filesystem access to the repo), swap
+the `source "$ENV_FILE"` line for a macOS Keychain lookup instead, such as:
+
+```bash
+export UNIFI_PASSWORD="$(security find-generic-password -a "$USER" -s unifi-mcp -w)"
+```
+
 ## 5. Available tools
 
 | Tool | Parameters | Description |
@@ -222,6 +280,11 @@ Restart Claude Desktop after editing the config.
 | `get_site_health` | — | Get health status (WAN/WLAN/LAN subsystems) for the current site. |
 | `get_networks` | — | List network (VLAN) configurations for the current site. |
 | `get_device_activity` | `mac` (required) | Get a device's connected clients and aggregate traffic (AP or switch). |
+| `get_firewall_rules` | — | List all firewall rules for the current site — both legacy custom rules and zone-based firewall policies (including predefined ones) — with active/inactive status. |
+| `enable_firewall_rule` | `rule_id` (required) | Enable (activate) a legacy firewall rule by its rule ID. |
+| `disable_firewall_rule` | `rule_id` (required) | Disable (deactivate) a legacy firewall rule by its rule ID. |
+| `enable_firewall_policy` | `policy_id` (required) | Enable (activate) a zone-based firewall policy by its policy ID (predefined policies can't be modified). |
+| `disable_firewall_policy` | `policy_id` (required) | Disable (deactivate) a zone-based firewall policy by its policy ID (predefined policies can't be modified). |
 
 `UNIFI_SITE` (from your config) determines which site these operate against;
 there's no per-call site override.

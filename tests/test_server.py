@@ -11,6 +11,7 @@ from unifi_mcp.server import (
     format_clients,
     format_device_activity,
     format_devices,
+    format_firewall_rules,
     format_health,
     format_networks,
     format_sites,
@@ -38,6 +39,11 @@ class TestListTools:
         assert "get_site_health" in tool_names
         assert "get_networks" in tool_names
         assert "get_device_activity" in tool_names
+        assert "get_firewall_rules" in tool_names
+        assert "enable_firewall_rule" in tool_names
+        assert "disable_firewall_rule" in tool_names
+        assert "enable_firewall_policy" in tool_names
+        assert "disable_firewall_policy" in tool_names
 
     @pytest.mark.asyncio
     async def test_tools_have_descriptions(self) -> None:
@@ -164,6 +170,93 @@ class TestCallTool:
         assert "Living Room AP" in result[0].text
         assert "laptop" in result[0].text
         assert "Connected Clients: 1" in result[0].text
+
+    @pytest.mark.asyncio
+    async def test_call_get_firewall_rules(self) -> None:
+        """Test calling get_firewall_rules tool merges legacy rules and zone-based policies."""
+        mock_client = AsyncMock()
+        mock_client.get_firewall_rules = AsyncMock(
+            return_value=[
+                {
+                    "_id": "rule1",
+                    "name": "Block WAN",
+                    "ruleset": "WAN_IN",
+                    "action": "drop",
+                    "enabled": True,
+                }
+            ]
+        )
+        mock_client.get_firewall_policies = AsyncMock(
+            return_value=[
+                {
+                    "_id": "policy1",
+                    "name": "Block Guest to LAN",
+                    "action": "BLOCK",
+                    "enabled": False,
+                    "predefined": False,
+                }
+            ]
+        )
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool("get_firewall_rules", {})
+
+        assert len(result) == 1
+        assert "Block WAN" in result[0].text
+        assert "Active" in result[0].text
+        assert "Block Guest to LAN" in result[0].text
+        assert "Inactive" in result[0].text
+
+    @pytest.mark.asyncio
+    async def test_call_enable_firewall_rule(self) -> None:
+        """Test calling enable_firewall_rule tool."""
+        mock_client = AsyncMock()
+        mock_client.set_firewall_rule_enabled = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool("enable_firewall_rule", {"rule_id": "rule1"})
+
+        assert len(result) == 1
+        assert "enabled" in result[0].text
+        mock_client.set_firewall_rule_enabled.assert_called_once_with("rule1", True)
+
+    @pytest.mark.asyncio
+    async def test_call_disable_firewall_rule(self) -> None:
+        """Test calling disable_firewall_rule tool."""
+        mock_client = AsyncMock()
+        mock_client.set_firewall_rule_enabled = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool("disable_firewall_rule", {"rule_id": "rule1"})
+
+        assert len(result) == 1
+        assert "disabled" in result[0].text
+        mock_client.set_firewall_rule_enabled.assert_called_once_with("rule1", False)
+
+    @pytest.mark.asyncio
+    async def test_call_enable_firewall_policy(self) -> None:
+        """Test calling enable_firewall_policy tool."""
+        mock_client = AsyncMock()
+        mock_client.set_firewall_policy_enabled = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool("enable_firewall_policy", {"policy_id": "policy1"})
+
+        assert len(result) == 1
+        assert "enabled" in result[0].text
+        mock_client.set_firewall_policy_enabled.assert_called_once_with("policy1", True)
+
+    @pytest.mark.asyncio
+    async def test_call_disable_firewall_policy(self) -> None:
+        """Test calling disable_firewall_policy tool."""
+        mock_client = AsyncMock()
+        mock_client.set_firewall_policy_enabled = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool(
+                "disable_firewall_policy", {"policy_id": "policy1"}
+            )
+
+        assert len(result) == 1
+        assert "disabled" in result[0].text
+        mock_client.set_firewall_policy_enabled.assert_called_once_with(
+            "policy1", False
+        )
 
 
 class TestClientLifecycle:
@@ -317,6 +410,62 @@ class TestFormatters:
         assert "LAN" in result
         assert "corporate" in result
         assert "192.168.1.0/24" in result
+
+    def test_format_firewall_rules_empty(self) -> None:
+        """Test formatting empty firewall rule/policy lists."""
+        result = format_firewall_rules([], [])
+        assert result == "No firewall rules or policies configured."
+
+    def test_format_firewall_rules_with_data(self) -> None:
+        """Test formatting legacy firewall rules."""
+        rules = [
+            {
+                "_id": "rule1",
+                "name": "Block WAN",
+                "ruleset": "WAN_IN",
+                "action": "drop",
+                "enabled": True,
+            },
+            {
+                "_id": "rule2",
+                "name": "Allow LAN",
+                "ruleset": "LAN_IN",
+                "action": "accept",
+                "enabled": False,
+            },
+        ]
+        result = format_firewall_rules(rules, [])
+        assert "Block WAN" in result
+        assert "WAN_IN" in result
+        assert "DROP" in result
+        assert "Active" in result
+        assert "Allow LAN" in result
+        assert "Inactive" in result
+
+    def test_format_firewall_rules_with_policies(self) -> None:
+        """Test formatting zone-based firewall policies."""
+        policies = [
+            {
+                "_id": "policy1",
+                "name": "Block Guest to LAN",
+                "action": "BLOCK",
+                "enabled": True,
+                "predefined": False,
+            },
+            {
+                "_id": "policy2",
+                "name": "Allow Established/Related",
+                "action": "ALLOW",
+                "enabled": True,
+                "predefined": True,
+            },
+        ]
+        result = format_firewall_rules([], policies)
+        assert "Block Guest to LAN" in result
+        assert "Zone Policy" in result
+        assert "Allow Established/Related" in result
+        assert "Yes" in result
+        assert "No" in result
 
     def test_format_uptime_seconds(self) -> None:
         """Test formatting uptime in seconds."""
