@@ -6,19 +6,14 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv
 
 # Copy project files
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
 COPY src/ ./src/
 
 # Install dependencies
 RUN uv pip install --system -e .
 
-# Set environment variables (can be overridden at runtime)
-ENV UNIFI_HOST=""
-ENV UNIFI_USERNAME=""
-ENV UNIFI_PASSWORD=""
-ENV UNIFI_SITE="default"
-ENV UNIFI_VERIFY_SSL="true"
-ENV UNIFI_IS_UNIFI_OS="false"
+# Credentials are supplied at container run time (see docker-compose.yml),
+# never at build time, so they are never baked into an image layer.
 
 # Run the MCP server
 CMD ["unifi-mcp"]
