@@ -31,9 +31,8 @@ uv pip install -e ".[dev]"
 src/
   unifi_mcp/
     __init__.py      # Package initialization
-    server.py        # MCP server implementation
+    server.py        # MCP server implementation and tool definitions
     unifi_client.py  # UniFi API client
-    tools/           # MCP tools definitions
     resources/       # MCP resources definitions
 tests/
   test_*.py          # Test files
