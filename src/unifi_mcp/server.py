@@ -54,6 +54,51 @@ async def _handle_restart_device(client: UniFiClient, arguments: dict[str, Any])
     return f"Restart command sent to device {mac}"
 
 
+async def _handle_adopt_device(client: UniFiClient, arguments: dict[str, Any]) -> str:
+    mac = arguments.get("mac", "")
+    await client.adopt_device(mac)
+    return f"Adopt command sent to device {mac}"
+
+
+async def _handle_force_provision_device(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    mac = arguments.get("mac", "")
+    await client.force_provision_device(mac)
+    return f"Force-provision command sent to device {mac}"
+
+
+async def _handle_upgrade_device(client: UniFiClient, arguments: dict[str, Any]) -> str:
+    mac = arguments.get("mac", "")
+    await client.upgrade_device(mac)
+    return f"Upgrade command sent to device {mac}"
+
+
+async def _handle_power_cycle_port(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    mac = arguments.get("mac", "")
+    port_idx = arguments.get("port_idx", 0)
+    await client.power_cycle_port(mac, port_idx)
+    return f"Power-cycle command sent to port {port_idx} on device {mac}"
+
+
+async def _handle_set_device_locate(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    mac = arguments.get("mac", "")
+    await client.set_device_locate(mac)
+    return f"Locate LED enabled on device {mac}"
+
+
+async def _handle_unset_device_locate(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    mac = arguments.get("mac", "")
+    await client.unset_device_locate(mac)
+    return f"Locate LED disabled on device {mac}"
+
+
 async def _handle_get_clients(client: UniFiClient, arguments: dict[str, Any]) -> str:
     if arguments.get("include_offline", False):
         clients = await client.get_all_clients()
@@ -82,6 +127,29 @@ async def _handle_disconnect_client(
     return f"Client {mac} has been disconnected."
 
 
+async def _handle_forget_client(client: UniFiClient, arguments: dict[str, Any]) -> str:
+    mac = arguments.get("mac", "")
+    await client.forget_client(mac)
+    return f"Client {mac} has been forgotten by the controller."
+
+
+async def _handle_authorize_guest(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    mac = arguments.get("mac", "")
+    minutes = arguments.get("minutes")
+    await client.authorize_guest(mac, minutes)
+    return f"Client {mac} has been authorized via the guest portal."
+
+
+async def _handle_unauthorize_guest(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    mac = arguments.get("mac", "")
+    await client.unauthorize_guest(mac)
+    return f"Client {mac}'s guest portal authorization has been revoked."
+
+
 async def _handle_get_sites(client: UniFiClient, arguments: dict[str, Any]) -> str:
     return format_sites(await client.get_sites())
 
@@ -94,6 +162,26 @@ async def _handle_get_site_health(
 
 async def _handle_get_networks(client: UniFiClient, arguments: dict[str, Any]) -> str:
     return format_networks(await client.get_networks())
+
+
+async def _handle_create_network(client: UniFiClient, arguments: dict[str, Any]) -> str:
+    network = arguments.get("network", {})
+    created = await client.create_network(network)
+    name = created.get("name", created.get("_id", "new network"))
+    return f"Network '{name}' has been created."
+
+
+async def _handle_update_network(client: UniFiClient, arguments: dict[str, Any]) -> str:
+    network_id = arguments.get("network_id", "")
+    network = arguments.get("network", {})
+    await client.update_network(network_id, network)
+    return f"Network {network_id} has been updated."
+
+
+async def _handle_delete_network(client: UniFiClient, arguments: dict[str, Any]) -> str:
+    network_id = arguments.get("network_id", "")
+    await client.delete_network(network_id)
+    return f"Network {network_id} has been deleted."
 
 
 async def _handle_get_device_activity(
@@ -128,6 +216,23 @@ async def _handle_disable_firewall_rule(
     return f"Firewall rule {rule_id} has been disabled."
 
 
+async def _handle_create_firewall_rule(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    rule = arguments.get("rule", {})
+    created = await client.create_firewall_rule(rule)
+    name = created.get("name", created.get("_id", "new rule"))
+    return f"Firewall rule '{name}' has been created."
+
+
+async def _handle_delete_firewall_rule(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    rule_id = arguments.get("rule_id", "")
+    await client.delete_firewall_rule(rule_id)
+    return f"Firewall rule {rule_id} has been deleted."
+
+
 async def _handle_enable_firewall_policy(
     client: UniFiClient, arguments: dict[str, Any]
 ) -> str:
@@ -142,6 +247,33 @@ async def _handle_disable_firewall_policy(
     policy_id = arguments.get("policy_id", "")
     await client.set_firewall_policy_enabled(policy_id, False)
     return f"Firewall policy {policy_id} has been disabled."
+
+
+async def _handle_create_firewall_policy(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    policy = arguments.get("policy", {})
+    created = await client.create_firewall_policy(policy)
+    name = created.get("name", created.get("_id", "new policy"))
+    return f"Firewall policy '{name}' has been created."
+
+
+async def _handle_batch_update_firewall_policies(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    policies = arguments.get("policies", [])
+    await client.batch_update_firewall_policies(policies)
+    plural = "y" if len(policies) == 1 else "ies"
+    return f"Updated {len(policies)} firewall polic{plural}."
+
+
+async def _handle_batch_delete_firewall_policies(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    policy_ids = arguments.get("policy_ids", [])
+    await client.batch_delete_firewall_policies(policy_ids)
+    plural = "y" if len(policy_ids) == 1 else "ies"
+    return f"Deleted {len(policy_ids)} firewall polic{plural}."
 
 
 @dataclass(frozen=True)
@@ -169,6 +301,40 @@ _POLICY_ID_PROPERTY = {
     "description": "Zone-based firewall policy ID (`_id`), as returned by get_firewall_rules",
 }
 
+_NETWORK_ID_PROPERTY = {
+    "type": "string",
+    "description": "Network configuration ID (`_id`), as returned by get_networks",
+}
+
+_PORT_IDX_PROPERTY = {
+    "type": "integer",
+    "description": "Index of the switch port to power-cycle",
+}
+
+_FIREWALL_RULE_PROPERTY = {
+    "type": "object",
+    "description": (
+        "Legacy firewall rule fields (e.g. `name`, `ruleset`, `action`, "
+        "`protocol`, `src_address`, `dst_address`, `enabled`)"
+    ),
+}
+
+_FIREWALL_POLICY_PROPERTY = {
+    "type": "object",
+    "description": (
+        "Zone-based firewall policy fields (e.g. `name`, `action`, "
+        "`enabled`, `source`, `destination`)"
+    ),
+}
+
+_NETWORK_PROPERTY = {
+    "type": "object",
+    "description": (
+        "Network configuration fields (e.g. `name`, `purpose`, `vlan`, "
+        "`ip_subnet`, `enabled`)"
+    ),
+}
+
 TOOLS: list[ToolSpec] = [
     ToolSpec(
         name="get_devices",
@@ -185,6 +351,66 @@ TOOLS: list[ToolSpec] = [
             "required": ["mac"],
         },
         handler=_handle_restart_device,
+    ),
+    ToolSpec(
+        name="adopt_device",
+        description="Adopt a pending UniFi device onto the controller",
+        input_schema={
+            "type": "object",
+            "properties": {"mac": _MAC_PROPERTY},
+            "required": ["mac"],
+        },
+        handler=_handle_adopt_device,
+    ),
+    ToolSpec(
+        name="force_provision_device",
+        description="Force a configuration push to a UniFi device",
+        input_schema={
+            "type": "object",
+            "properties": {"mac": _MAC_PROPERTY},
+            "required": ["mac"],
+        },
+        handler=_handle_force_provision_device,
+    ),
+    ToolSpec(
+        name="upgrade_device",
+        description="Trigger a firmware upgrade on a UniFi device",
+        input_schema={
+            "type": "object",
+            "properties": {"mac": _MAC_PROPERTY},
+            "required": ["mac"],
+        },
+        handler=_handle_upgrade_device,
+    ),
+    ToolSpec(
+        name="power_cycle_port",
+        description="Power-cycle a PoE port on a UniFi switch",
+        input_schema={
+            "type": "object",
+            "properties": {"mac": _MAC_PROPERTY, "port_idx": _PORT_IDX_PROPERTY},
+            "required": ["mac", "port_idx"],
+        },
+        handler=_handle_power_cycle_port,
+    ),
+    ToolSpec(
+        name="set_device_locate",
+        description="Flash a UniFi device's LED to help locate it physically",
+        input_schema={
+            "type": "object",
+            "properties": {"mac": _MAC_PROPERTY},
+            "required": ["mac"],
+        },
+        handler=_handle_set_device_locate,
+    ),
+    ToolSpec(
+        name="unset_device_locate",
+        description="Stop flashing a UniFi device's locate LED",
+        input_schema={
+            "type": "object",
+            "properties": {"mac": _MAC_PROPERTY},
+            "required": ["mac"],
+        },
+        handler=_handle_unset_device_locate,
     ),
     ToolSpec(
         name="get_clients",
@@ -233,6 +459,42 @@ TOOLS: list[ToolSpec] = [
         handler=_handle_disconnect_client,
     ),
     ToolSpec(
+        name="forget_client",
+        description="Remove a client from the controller's known-clients list",
+        input_schema={
+            "type": "object",
+            "properties": {"mac": _MAC_PROPERTY},
+            "required": ["mac"],
+        },
+        handler=_handle_forget_client,
+    ),
+    ToolSpec(
+        name="authorize_guest",
+        description="Authorize a client through the guest portal",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "mac": _MAC_PROPERTY,
+                "minutes": {
+                    "type": "integer",
+                    "description": "Session length in minutes before authorization expires",
+                },
+            },
+            "required": ["mac"],
+        },
+        handler=_handle_authorize_guest,
+    ),
+    ToolSpec(
+        name="unauthorize_guest",
+        description="Revoke a client's guest portal authorization",
+        input_schema={
+            "type": "object",
+            "properties": {"mac": _MAC_PROPERTY},
+            "required": ["mac"],
+        },
+        handler=_handle_unauthorize_guest,
+    ),
+    ToolSpec(
         name="get_sites",
         description="Get all UniFi sites configured on the controller",
         input_schema={"type": "object", "properties": {}, "required": []},
@@ -249,6 +511,39 @@ TOOLS: list[ToolSpec] = [
         description="Get all network configurations for the current site",
         input_schema={"type": "object", "properties": {}, "required": []},
         handler=_handle_get_networks,
+    ),
+    ToolSpec(
+        name="create_network",
+        description="Create a new network configuration (e.g. a VLAN)",
+        input_schema={
+            "type": "object",
+            "properties": {"network": _NETWORK_PROPERTY},
+            "required": ["network"],
+        },
+        handler=_handle_create_network,
+    ),
+    ToolSpec(
+        name="update_network",
+        description="Update an existing network configuration",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "network_id": _NETWORK_ID_PROPERTY,
+                "network": _NETWORK_PROPERTY,
+            },
+            "required": ["network_id", "network"],
+        },
+        handler=_handle_update_network,
+    ),
+    ToolSpec(
+        name="delete_network",
+        description="Delete a network configuration by its network ID",
+        input_schema={
+            "type": "object",
+            "properties": {"network_id": _NETWORK_ID_PROPERTY},
+            "required": ["network_id"],
+        },
+        handler=_handle_delete_network,
     ),
     ToolSpec(
         name="get_device_activity",
@@ -296,6 +591,26 @@ TOOLS: list[ToolSpec] = [
         handler=_handle_disable_firewall_rule,
     ),
     ToolSpec(
+        name="create_firewall_rule",
+        description="Create a new legacy firewall rule",
+        input_schema={
+            "type": "object",
+            "properties": {"rule": _FIREWALL_RULE_PROPERTY},
+            "required": ["rule"],
+        },
+        handler=_handle_create_firewall_rule,
+    ),
+    ToolSpec(
+        name="delete_firewall_rule",
+        description="Delete a legacy firewall rule by its rule ID",
+        input_schema={
+            "type": "object",
+            "properties": {"rule_id": _RULE_ID_PROPERTY},
+            "required": ["rule_id"],
+        },
+        handler=_handle_delete_firewall_rule,
+    ),
+    ToolSpec(
         name="enable_firewall_policy",
         description=(
             "Enable (activate) a zone-based firewall policy by its policy ID "
@@ -320,6 +635,54 @@ TOOLS: list[ToolSpec] = [
             "required": ["policy_id"],
         },
         handler=_handle_disable_firewall_policy,
+    ),
+    ToolSpec(
+        name="create_firewall_policy",
+        description="Create a new zone-based firewall policy",
+        input_schema={
+            "type": "object",
+            "properties": {"policy": _FIREWALL_POLICY_PROPERTY},
+            "required": ["policy"],
+        },
+        handler=_handle_create_firewall_policy,
+    ),
+    ToolSpec(
+        name="batch_update_firewall_policies",
+        description=(
+            "Bulk-update zone-based firewall policies (predefined policies "
+            "can't be modified)"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "policies": {
+                    "type": "array",
+                    "items": _FIREWALL_POLICY_PROPERTY,
+                    "description": "Full policy objects to update, each including `_id`",
+                }
+            },
+            "required": ["policies"],
+        },
+        handler=_handle_batch_update_firewall_policies,
+    ),
+    ToolSpec(
+        name="batch_delete_firewall_policies",
+        description=(
+            "Bulk-delete zone-based firewall policies by ID (predefined "
+            "policies can't be deleted)"
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "policy_ids": {
+                    "type": "array",
+                    "items": _POLICY_ID_PROPERTY,
+                    "description": "Policy IDs (`_id`) to delete",
+                }
+            },
+            "required": ["policy_ids"],
+        },
+        handler=_handle_batch_delete_firewall_policies,
     ),
 ]
 

@@ -212,7 +212,7 @@ class UniFiClient:
         self,
         method: str,
         endpoint: str,
-        json: dict[str, Any] | None = None,
+        json: dict[str, Any] | list[Any] | None = None,
         _retry_on_expired_session: bool = True,
     ) -> list[dict[str, Any]]:
         """Make a v2 API request.
@@ -303,6 +303,103 @@ class UniFiClient:
         )
         return True
 
+    async def adopt_device(self, mac: str) -> bool:
+        """Adopt a pending device onto the controller.
+
+        Args:
+            mac: Device MAC address.
+
+        Returns:
+            True if the adopt command was sent successfully.
+        """
+        await self._request(
+            "POST",
+            "/api/s/{site}/cmd/devmgr",
+            json={"cmd": "adopt", "mac": mac.lower()},
+        )
+        return True
+
+    async def force_provision_device(self, mac: str) -> bool:
+        """Force a configuration push to a device.
+
+        Args:
+            mac: Device MAC address.
+
+        Returns:
+            True if the force-provision command was sent successfully.
+        """
+        await self._request(
+            "POST",
+            "/api/s/{site}/cmd/devmgr",
+            json={"cmd": "force-provision", "mac": mac.lower()},
+        )
+        return True
+
+    async def upgrade_device(self, mac: str) -> bool:
+        """Trigger a firmware upgrade on a device.
+
+        Args:
+            mac: Device MAC address.
+
+        Returns:
+            True if the upgrade command was sent successfully.
+        """
+        await self._request(
+            "POST",
+            "/api/s/{site}/cmd/devmgr",
+            json={"cmd": "upgrade", "mac": mac.lower()},
+        )
+        return True
+
+    async def power_cycle_port(self, mac: str, port_idx: int) -> bool:
+        """Power-cycle a PoE port on a switch.
+
+        Args:
+            mac: Switch MAC address.
+            port_idx: Index of the port to power-cycle.
+
+        Returns:
+            True if the power-cycle command was sent successfully.
+        """
+        await self._request(
+            "POST",
+            "/api/s/{site}/cmd/devmgr",
+            json={"cmd": "power-cycle", "mac": mac.lower(), "port_idx": port_idx},
+        )
+        return True
+
+    async def set_device_locate(self, mac: str) -> bool:
+        """Flash a device's LED to help locate it physically.
+
+        Args:
+            mac: Device MAC address.
+
+        Returns:
+            True if the set-locate command was sent successfully.
+        """
+        await self._request(
+            "POST",
+            "/api/s/{site}/cmd/devmgr",
+            json={"cmd": "set-locate", "mac": mac.lower()},
+        )
+        return True
+
+    async def unset_device_locate(self, mac: str) -> bool:
+        """Stop flashing a device's locate LED.
+
+        Args:
+            mac: Device MAC address.
+
+        Returns:
+            True if the unset-locate command was sent successfully.
+        """
+        await self._request(
+            "POST",
+            "/api/s/{site}/cmd/devmgr",
+            json={"cmd": "unset-locate", "mac": mac.lower()},
+        )
+        return True
+
     # Client Management
     async def get_clients(self) -> list[dict[str, Any]]:
         """Get all currently connected clients.
@@ -368,6 +465,55 @@ class UniFiClient:
         )
         return True
 
+    async def forget_client(self, mac: str) -> bool:
+        """Remove a client from the controller's known-clients list.
+
+        Args:
+            mac: Client MAC address.
+
+        Returns:
+            True if the forget command was sent successfully.
+        """
+        await self._request(
+            "POST",
+            "/api/s/{site}/cmd/stamgr",
+            json={"cmd": "forget-sta", "macs": [mac.lower()]},
+        )
+        return True
+
+    async def authorize_guest(self, mac: str, minutes: int | None = None) -> bool:
+        """Authorize a client through the guest portal.
+
+        Args:
+            mac: Client MAC address.
+            minutes: Session length in minutes, if the authorization should
+                expire automatically.
+
+        Returns:
+            True if the authorize command was sent successfully.
+        """
+        payload: dict[str, Any] = {"cmd": "authorize-guest", "mac": mac.lower()}
+        if minutes is not None:
+            payload["minutes"] = minutes
+        await self._request("POST", "/api/s/{site}/cmd/stamgr", json=payload)
+        return True
+
+    async def unauthorize_guest(self, mac: str) -> bool:
+        """Revoke a client's guest portal authorization.
+
+        Args:
+            mac: Client MAC address.
+
+        Returns:
+            True if the unauthorize command was sent successfully.
+        """
+        await self._request(
+            "POST",
+            "/api/s/{site}/cmd/stamgr",
+            json={"cmd": "unauthorize-guest", "mac": mac.lower()},
+        )
+        return True
+
     # Site Management
     async def get_sites(self) -> list[dict[str, Any]]:
         """Get all sites.
@@ -393,6 +539,51 @@ class UniFiClient:
             List of network configuration dictionaries.
         """
         return await self._request("GET", "/api/s/{site}/rest/networkconf")
+
+    async def create_network(self, network: dict[str, Any]) -> dict[str, Any]:
+        """Create a new network configuration (e.g. a VLAN).
+
+        Args:
+            network: Network fields (e.g. `name`, `purpose`, `vlan`,
+                `ip_subnet`).
+
+        Returns:
+            The created network, as returned by the controller.
+        """
+        created = await self._request(
+            "POST", "/api/s/{site}/rest/networkconf", json=network
+        )
+        return created[0] if created else {}
+
+    async def update_network(self, network_id: str, network: dict[str, Any]) -> bool:
+        """Update an existing network configuration.
+
+        The controller's REST endpoint replaces the whole network object on
+        PUT, so callers should pass the full object with their changes applied.
+
+        Args:
+            network_id: Network ID (`_id`).
+            network: Full network object with updated fields.
+
+        Returns:
+            True if the update was sent successfully.
+        """
+        await self._request(
+            "PUT", "/api/s/{site}/rest/networkconf/" + network_id, json=network
+        )
+        return True
+
+    async def delete_network(self, network_id: str) -> bool:
+        """Delete a network configuration.
+
+        Args:
+            network_id: Network ID (`_id`).
+
+        Returns:
+            True if the delete command was sent successfully.
+        """
+        await self._request("DELETE", "/api/s/{site}/rest/networkconf/" + network_id)
+        return True
 
     # Firewall Rules (legacy)
     async def get_firewall_rules(self) -> list[dict[str, Any]]:
@@ -441,6 +632,33 @@ class UniFiClient:
         )
         return True
 
+    async def create_firewall_rule(self, rule: dict[str, Any]) -> dict[str, Any]:
+        """Create a new legacy firewall rule.
+
+        Args:
+            rule: Firewall rule fields (e.g. `name`, `ruleset`, `action`,
+                `protocol`, `src_address`, `dst_address`, `enabled`).
+
+        Returns:
+            The created rule, as returned by the controller.
+        """
+        created = await self._request(
+            "POST", "/api/s/{site}/rest/firewallrule", json=rule
+        )
+        return created[0] if created else {}
+
+    async def delete_firewall_rule(self, rule_id: str) -> bool:
+        """Delete a legacy firewall rule.
+
+        Args:
+            rule_id: Firewall rule ID (`_id`).
+
+        Returns:
+            True if the delete command was sent successfully.
+        """
+        await self._request("DELETE", "/api/s/{site}/rest/firewallrule/" + rule_id)
+        return True
+
     # Firewall Policies (zone-based firewall, UniFi Network 8.0+)
     async def get_firewall_policies(self) -> list[dict[str, Any]]:
         """Get all zone-based firewall policies.
@@ -475,6 +693,71 @@ class UniFiClient:
 
         policy["enabled"] = enabled
         await self._request_v2("PUT", "/firewall-policies/" + policy_id, json=policy)
+        return True
+
+    async def create_firewall_policy(self, policy: dict[str, Any]) -> dict[str, Any]:
+        """Create a new zone-based firewall policy.
+
+        Args:
+            policy: Firewall policy fields (e.g. `name`, `action`,
+                `enabled`, `source`, `destination`).
+
+        Returns:
+            The created policy, as returned by the controller.
+        """
+        created = await self._request_v2("POST", "/firewall-policies", json=policy)
+        return created[0] if created else {}
+
+    async def _reject_predefined_policies(self, policy_ids: list[str]) -> None:
+        """Raise if any of the given policy IDs is a predefined (built-in) policy.
+
+        Predefined policies can't be modified or deleted by the controller,
+        so this is checked client-side to surface a clear error instead of
+        letting the request fail (or silently do nothing) downstream.
+        """
+        policies = await self.get_firewall_policies()
+        predefined_ids = {p.get("_id") for p in policies if p.get("predefined", False)}
+        blocked = predefined_ids & set(policy_ids)
+        if blocked:
+            raise UniFiError(
+                "Predefined firewall policies can't be modified or deleted: "
+                + ", ".join(sorted(blocked))
+            )
+
+    async def batch_update_firewall_policies(
+        self, policies: list[dict[str, Any]]
+    ) -> bool:
+        """Bulk-update zone-based firewall policies.
+
+        Args:
+            policies: Full policy objects to update, each including `_id`.
+
+        Returns:
+            True if the update was sent successfully.
+
+        Raises:
+            UniFiError: If any policy is predefined.
+        """
+        await self._reject_predefined_policies([p.get("_id", "") for p in policies])
+        await self._request_v2("PUT", "/firewall-policies/batch", json=policies)
+        return True
+
+    async def batch_delete_firewall_policies(self, policy_ids: list[str]) -> bool:
+        """Bulk-delete zone-based firewall policies.
+
+        Args:
+            policy_ids: Policy IDs (`_id`) to delete.
+
+        Returns:
+            True if the delete was sent successfully.
+
+        Raises:
+            UniFiError: If any policy is predefined.
+        """
+        await self._reject_predefined_policies(policy_ids)
+        await self._request_v2(
+            "POST", "/firewall-policies/batch-delete", json=policy_ids
+        )
         return True
 
     # Device Activity
