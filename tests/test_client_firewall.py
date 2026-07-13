@@ -235,3 +235,29 @@ class TestUniFiClientFirewall:
         with pytest.raises(UniFiError, match="Predefined firewall policies"):
             await mock_client.batch_delete_firewall_policies(["policy1"])
         mock_client._request_v2.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_firewall_zones(self, mock_client: UniFiClient) -> None:
+        """Test get_firewall_zones method."""
+        mock_client._request_v2 = AsyncMock(
+            return_value=[{"_id": "zone1", "name": "Internal"}]
+        )
+
+        result = await mock_client.get_firewall_zones()
+
+        assert len(result) == 1
+        mock_client._request_v2.assert_called_once_with("GET", "/firewall/zones")
+
+    @pytest.mark.asyncio
+    async def test_get_firewall_zone_matrix(self, mock_client: UniFiClient) -> None:
+        """Test get_firewall_zone_matrix method."""
+        mock_client._request_v2 = AsyncMock(
+            return_value=[
+                {"from_zone_id": "zone1", "to_zone_id": "zone2", "action": "allow"}
+            ]
+        )
+
+        result = await mock_client.get_firewall_zone_matrix()
+
+        assert len(result) == 1
+        mock_client._request_v2.assert_called_once_with("GET", "/firewall/zone-matrix")

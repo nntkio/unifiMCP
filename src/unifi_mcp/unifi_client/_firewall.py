@@ -182,3 +182,27 @@ class _FirewallMixin:
             "POST", "/firewall-policies/batch-delete", json=policy_ids
         )
         return True
+
+    # Firewall Zones (used by zone-based firewall policies)
+    async def get_firewall_zones(self) -> list[dict[str, Any]]:
+        """Get all firewall zones.
+
+        Zones are referenced by zone-based firewall policies (source/
+        destination `zone_id`) but aren't included in `get_firewall_policies`
+        itself.
+
+        Returns:
+            List of firewall zone dictionaries.
+        """
+        return await self._request_v2("GET", "/firewall/zones")
+
+    async def get_firewall_zone_matrix(self) -> list[dict[str, Any]]:
+        """Get the firewall zone matrix.
+
+        The zone matrix reports the default allow/block posture between
+        each pair of zones.
+
+        Returns:
+            List of zone-matrix entries.
+        """
+        return await self._request_v2("GET", "/firewall/zone-matrix")

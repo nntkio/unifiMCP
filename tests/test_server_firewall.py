@@ -4,7 +4,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from unifi_mcp.server import call_tool, format_firewall_rules
+from unifi_mcp.server import (
+    call_tool,
+    format_firewall_rules,
+    format_firewall_zone_matrix,
+    format_firewall_zones,
+)
 
 
 class TestCallToolFirewall:
@@ -175,6 +180,78 @@ class TestCallToolFirewall:
         assert len(result) == 1
         assert "Deleted 1" in result[0].text
         mock_client.batch_delete_firewall_policies.assert_called_once_with(["policy1"])
+
+
+class TestCallToolFirewallZones:
+    """Tests for firewall zone-related call_tool dispatch."""
+
+    @pytest.mark.asyncio
+    async def test_call_get_firewall_zones(self) -> None:
+        """Test calling get_firewall_zones tool."""
+        mock_client = AsyncMock()
+        mock_client.get_firewall_zones = AsyncMock(
+            return_value=[{"_id": "zone1", "name": "Internal"}]
+        )
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool("get_firewall_zones", {})
+
+        assert len(result) == 1
+        assert "Internal" in result[0].text
+
+    @pytest.mark.asyncio
+    async def test_call_get_firewall_zone_matrix(self) -> None:
+        """Test calling get_firewall_zone_matrix tool."""
+        mock_client = AsyncMock()
+        mock_client.get_firewall_zone_matrix = AsyncMock(
+            return_value=[
+                {
+                    "from_zone_name": "Internal",
+                    "to_zone_name": "External",
+                    "action": "allow",
+                }
+            ]
+        )
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool("get_firewall_zone_matrix", {})
+
+        assert len(result) == 1
+        assert "Internal" in result[0].text
+        assert "External" in result[0].text
+
+
+class TestFormatFirewallZones:
+    """Tests for format_firewall_zones and format_firewall_zone_matrix."""
+
+    def test_format_firewall_zones_empty(self) -> None:
+        """Test formatting empty firewall zone list."""
+        result = format_firewall_zones([])
+        assert result == "No firewall zones configured."
+
+    def test_format_firewall_zones_with_data(self) -> None:
+        """Test formatting firewall zone list."""
+        zones = [{"_id": "zone1", "name": "Internal"}]
+        result = format_firewall_zones(zones)
+        assert "Internal" in result
+        assert "zone1" in result
+
+    def test_format_firewall_zone_matrix_empty(self) -> None:
+        """Test formatting empty firewall zone matrix."""
+        result = format_firewall_zone_matrix([])
+        assert result == "No firewall zone matrix data available."
+
+    def test_format_firewall_zone_matrix_with_data(self) -> None:
+        """Test formatting firewall zone matrix."""
+        matrix = [
+            {
+                "from_zone_name": "Internal",
+                "to_zone_name": "External",
+                "action": "allow",
+            }
+        ]
+        result = format_firewall_zone_matrix(matrix)
+        assert "Internal" in result
+        assert "External" in result
+        assert "allow" in result
 
 
 class TestFormatFirewallRules:

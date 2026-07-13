@@ -21,3 +21,11 @@ class _SiteMixin:
             List of health metric dictionaries.
         """
         return await self._request("GET", "/api/s/{site}/stat/health")
+
+    async def get_sdn_status(self) -> list[dict[str, Any]]:
+        """Get the cloud-managed SDN (Site Manager) connection status for the site.
+
+        Returns:
+            List of SDN status dictionaries.
+        """
+        return await self._request("GET", "/api/s/{site}/stat/sdn")

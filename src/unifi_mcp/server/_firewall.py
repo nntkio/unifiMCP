@@ -119,6 +119,18 @@ async def _handle_batch_delete_firewall_policies(
     return f"Deleted {len(policy_ids)} firewall polic{plural}."
 
 
+async def _handle_get_firewall_zones(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    return format_firewall_zones(await client.get_firewall_zones())
+
+
+async def _handle_get_firewall_zone_matrix(
+    client: UniFiClient, arguments: dict[str, Any]
+) -> str:
+    return format_firewall_zone_matrix(await client.get_firewall_zone_matrix())
+
+
 # Formatting helpers
 def format_firewall_rules(
     rules: list[dict[str, Any]], policies: list[dict[str, Any]]
@@ -153,6 +165,41 @@ def format_firewall_rules(
         lines.append(
             f"| {name} | Zone Policy | {action} | {status} | {predefined} | {policy_id} |"
         )
+
+    return "\n".join(lines)
+
+
+def format_firewall_zones(zones: list[dict[str, Any]]) -> str:
+    """Format firewall zone list for display."""
+    if not zones:
+        return "No firewall zones configured."
+
+    lines = [f"Found {len(zones)} firewall zone(s):\n"]
+    for zone in zones:
+        name = zone.get("name", "Unnamed")
+        zone_id = zone.get("_id", "N/A")
+        lines.append(f"- {name}")
+        lines.append(f"  ID: {zone_id}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def format_firewall_zone_matrix(matrix: list[dict[str, Any]]) -> str:
+    """Format the firewall zone matrix for display."""
+    if not matrix:
+        return "No firewall zone matrix data available."
+
+    lines = [
+        "Firewall Zone Matrix:\n",
+        "| From Zone | To Zone | Default Action |",
+        "|-----------|---------|----------------|",
+    ]
+    for entry in matrix:
+        from_zone = entry.get("from_zone_name", entry.get("from_zone_id", "N/A"))
+        to_zone = entry.get("to_zone_name", entry.get("to_zone_id", "N/A"))
+        action = entry.get("action", entry.get("default_action", "N/A"))
+        lines.append(f"| {from_zone} | {to_zone} | {action} |")
 
     return "\n".join(lines)
 
@@ -281,5 +328,19 @@ FIREWALL_TOOLS: list[ToolSpec] = [
             "required": ["policy_ids"],
         },
         handler=_handle_batch_delete_firewall_policies,
+    ),
+    ToolSpec(
+        name="get_firewall_zones",
+        description="Get all firewall zones referenced by zone-based firewall policies",
+        input_schema={"type": "object", "properties": {}, "required": []},
+        handler=_handle_get_firewall_zones,
+    ),
+    ToolSpec(
+        name="get_firewall_zone_matrix",
+        description=(
+            "Get the default allow/block posture between each pair of firewall zones"
+        ),
+        input_schema={"type": "object", "properties": {}, "required": []},
+        handler=_handle_get_firewall_zone_matrix,
     ),
 ]
