@@ -21,9 +21,12 @@ HTTP is the SDK's recommended transport going forward.
 
 - Add a Streamable HTTP transport, selectable at runtime, without breaking the
   existing stdio behavior used by local/Claude Desktop setups.
-- Protect the network transport with an optional shared-secret bearer token,
-  since UnifiMCP's tools can mutate live network state (restart devices,
-  change firewall rules, block clients).
+- Protect the network transport with per-user, revocable, expiring bearer
+  tokens, since UnifiMCP's tools can mutate live network state (restart
+  devices, change firewall rules, block clients). Token issuance and
+  validation are specified separately in
+  `docs/superpowers/specs/2026-07-13-token-admin-design.md`; this spec only
+  covers how the HTTP transport *checks* a presented token.
 - Update the Docker deployment (`Dockerfile`/`docker-compose.yml`) to run in
   HTTP mode on the QNAP.
 - Cover the new code with tests consistent with the existing test style.
@@ -34,7 +37,8 @@ HTTP is the SDK's recommended transport going forward.
   service is exposed directly on the LAN IP for now. Can be fronted by NPM
   later without further code changes.
 - No full OAuth resource-server flow (the SDK's `mcp.server.auth` machinery)
-  — a single static bearer token is sufficient for a home LAN deployment.
+  — a shared SQLite-backed token store (see the token-admin spec) is
+  sufficient for a home LAN deployment.
 - No changes to tool behavior, formatting, or the UniFi client — this is
   purely a transport-layer addition.
 
@@ -50,11 +54,13 @@ New module: `src/unifi_mcp/server/_http.py`
   returns `200 OK` with no auth required — used by Docker's healthcheck.
 - Adds a small Starlette middleware, `BearerAuthMiddleware`, that:
   - Passes `/healthz` through unauthenticated.
-  - For all other paths, requires `Authorization: Bearer <MCP_HTTP_AUTH_TOKEN>`
-    if `MCP_HTTP_AUTH_TOKEN` is set; returns `401` on missing/mismatched
-    tokens.
-  - Is a no-op (no auth enforced) if `MCP_HTTP_AUTH_TOKEN` is unset, so
-    LAN-trust-only deployments of this same code aren't forced into auth.
+  - For all other paths, requires an `Authorization: Bearer <token>` header
+    and validates it via `TokenStore.validate(raw_token)` (from
+    `unifi_mcp.tokens`, shared with the admin service — see the token-admin
+    spec). Returns `401` on a missing header or a token that fails
+    validation (unknown, revoked, or expired).
+  - If the token DB file is missing or unreadable, fails closed: every
+    request is treated as unauthenticated (`401`), never fails open.
 - Exposes `run_http(mcp_server: Server, on_shutdown: Callable[[], Awaitable[None]]) -> None`,
   which builds the app, wires `on_shutdown` into the Starlette `lifespan`
   shutdown phase, and runs it via `uvicorn.run(...)` using host/port from
@@ -76,7 +82,7 @@ New environment variables (documented in `.env.example`):
 MCP_TRANSPORT=stdio          # stdio (default) | http
 MCP_HTTP_HOST=0.0.0.0
 MCP_HTTP_PORT=8765
-MCP_HTTP_AUTH_TOKEN=         # optional; if set, required as `Authorization: Bearer <token>`
+TOKEN_DB_PATH=/data/tokens.db  # shared with the admin service; see token-admin spec
 ```
 
 Existing stdio-based deployments (e.g. local Claude Desktop configs) are
@@ -84,8 +90,10 @@ unaffected since `MCP_TRANSPORT` defaults to `stdio`.
 
 ## Error handling & security
 
-- Missing/invalid bearer token → `401 Unauthorized`, rejected by the
-  middleware before the request reaches the MCP session manager.
+- Missing/invalid/expired/revoked bearer token → `401 Unauthorized`,
+  rejected by the middleware before the request reaches the MCP session
+  manager. Validation logic (hash lookup, expiry, revocation) lives in
+  `TokenStore` (token-admin spec), not duplicated here.
 - `/healthz` is exempt from auth so Docker's healthcheck (which doesn't send
   a token) keeps working.
 - `_close_client()` (shared UniFi client cleanup) runs on Starlette `lifespan`
@@ -104,6 +112,9 @@ transitively via `mcp`, but imported directly by `_http.py`):
 - `starlette`
 - `uvicorn`
 
+`_http.py` also depends on `unifi_mcp.tokens.TokenStore` (implemented as
+part of the token-admin spec).
+
 ## Docker changes
 
 `docker-compose.yml`:
@@ -112,19 +123,24 @@ transitively via `mcp`, but imported directly by `_http.py`):
   stdio in HTTP mode).
 - Add `ports: ["8765:8765"]`.
 - Add a `healthcheck` hitting `http://localhost:8765/healthz`.
+- Mount the shared `unifi-mcp-data:/data` volume (read access for
+  `TokenStore.validate`) — the volume itself and the `unifi-mcp-admin`
+  service that writes to it are defined in the token-admin spec.
 
-QNAP `.env` (not committed) sets `MCP_TRANSPORT=http` and a generated
-`MCP_HTTP_AUTH_TOKEN`. Local/dev `.env` stays on the `stdio` default.
+QNAP `.env` (not committed) sets `MCP_TRANSPORT=http` and
+`TOKEN_DB_PATH=/data/tokens.db`. Local/dev `.env` stays on the `stdio`
+default.
 
 ## Testing
 
 New `tests/test_server_http.py`, following existing conventions
 (`pytest.mark.asyncio`, Starlette `TestClient`):
 
-- `BearerAuthMiddleware` rejects requests with missing or incorrect tokens
-  (`401`).
-- `BearerAuthMiddleware` allows requests with the correct token.
-- `/healthz` succeeds unauthenticated even when a token is configured.
+- `BearerAuthMiddleware` rejects requests with missing, unknown, expired, or
+  revoked tokens (`401`) — using a tmp `TokenStore` seeded directly, not a
+  real admin-service round-trip.
+- `BearerAuthMiddleware` allows requests with a valid token.
+- `/healthz` succeeds unauthenticated even when the token store has entries.
 - `main()` dispatches to `run_http` when `MCP_TRANSPORT=http`, and to the
   existing stdio path otherwise (mocked, same pattern as
   `tests/test_server_registry.py`).
@@ -135,7 +151,8 @@ New `tests/test_server_http.py`, following existing conventions
 to also cover HTTP mode:
 
 - Note that `MCP_TRANSPORT` selects `stdio` (default) or `http`.
-- Document `MCP_HTTP_HOST`, `MCP_HTTP_PORT`, `MCP_HTTP_AUTH_TOKEN`.
+- Document `MCP_HTTP_HOST`, `MCP_HTTP_PORT`, `TOKEN_DB_PATH`, and link to the
+  token-admin spec/docs for how to actually obtain a bearer token.
 - Add a short "Running as a network service" section: how to start in HTTP
   mode, the `/mcp` and `/healthz` endpoints, and an example client config
   pointing at a remote Streamable HTTP URL instead of a local subprocess.
@@ -145,12 +162,16 @@ to also cover HTTP mode:
 
 ## Rollout
 
+This spec depends on `unifi_mcp.tokens.TokenStore` existing (implemented as
+part of `docs/superpowers/specs/2026-07-13-token-admin-design.md`) —
+implement that spec's `TokenStore` first, or alongside this one.
+
 1. Implement `_http.py`, wire `main()`, add deps, update `.env.example`.
 2. Add tests; run `pytest` and `ruff check . && ruff format .`.
 3. Update `docker-compose.yml`.
 4. Deploy to QNAP: rsync repo to
    `/share/CACHEDEV2_DATA/container/unifi-mcp/`, copy `.env` with
-   `MCP_TRANSPORT=http` and a generated `MCP_HTTP_AUTH_TOKEN`,
+   `MCP_TRANSPORT=http` and `TOKEN_DB_PATH=/data/tokens.db` set,
    `docker compose build && docker compose up -d`.
 5. Verify `curl http://172.16.25.50:8765/healthz` and an authenticated MCP
-   round-trip.
+   round-trip using a token minted through the admin service.
