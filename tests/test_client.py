@@ -318,6 +318,150 @@ class TestUniFiClientMethods:
         )
 
     @pytest.mark.asyncio
+    async def test_adopt_device(self, mock_client: UniFiClient) -> None:
+        """Test adopt_device method."""
+        mock_client._request.return_value = []
+
+        result = await mock_client.adopt_device("AA:BB:CC:DD:EE:FF")
+
+        assert result is True
+        mock_client._request.assert_called_once_with(
+            "POST",
+            "/api/s/{site}/cmd/devmgr",
+            json={"cmd": "adopt", "mac": "aa:bb:cc:dd:ee:ff"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_force_provision_device(self, mock_client: UniFiClient) -> None:
+        """Test force_provision_device method."""
+        mock_client._request.return_value = []
+
+        result = await mock_client.force_provision_device("AA:BB:CC:DD:EE:FF")
+
+        assert result is True
+        mock_client._request.assert_called_once_with(
+            "POST",
+            "/api/s/{site}/cmd/devmgr",
+            json={"cmd": "force-provision", "mac": "aa:bb:cc:dd:ee:ff"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_upgrade_device(self, mock_client: UniFiClient) -> None:
+        """Test upgrade_device method."""
+        mock_client._request.return_value = []
+
+        result = await mock_client.upgrade_device("AA:BB:CC:DD:EE:FF")
+
+        assert result is True
+        mock_client._request.assert_called_once_with(
+            "POST",
+            "/api/s/{site}/cmd/devmgr",
+            json={"cmd": "upgrade", "mac": "aa:bb:cc:dd:ee:ff"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_power_cycle_port(self, mock_client: UniFiClient) -> None:
+        """Test power_cycle_port method."""
+        mock_client._request.return_value = []
+
+        result = await mock_client.power_cycle_port("AA:BB:CC:DD:EE:FF", 3)
+
+        assert result is True
+        mock_client._request.assert_called_once_with(
+            "POST",
+            "/api/s/{site}/cmd/devmgr",
+            json={"cmd": "power-cycle", "mac": "aa:bb:cc:dd:ee:ff", "port_idx": 3},
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_device_locate(self, mock_client: UniFiClient) -> None:
+        """Test set_device_locate method."""
+        mock_client._request.return_value = []
+
+        result = await mock_client.set_device_locate("AA:BB:CC:DD:EE:FF")
+
+        assert result is True
+        mock_client._request.assert_called_once_with(
+            "POST",
+            "/api/s/{site}/cmd/devmgr",
+            json={"cmd": "set-locate", "mac": "aa:bb:cc:dd:ee:ff"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_unset_device_locate(self, mock_client: UniFiClient) -> None:
+        """Test unset_device_locate method."""
+        mock_client._request.return_value = []
+
+        result = await mock_client.unset_device_locate("AA:BB:CC:DD:EE:FF")
+
+        assert result is True
+        mock_client._request.assert_called_once_with(
+            "POST",
+            "/api/s/{site}/cmd/devmgr",
+            json={"cmd": "unset-locate", "mac": "aa:bb:cc:dd:ee:ff"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_forget_client(self, mock_client: UniFiClient) -> None:
+        """Test forget_client method."""
+        mock_client._request.return_value = []
+
+        result = await mock_client.forget_client("AA:BB:CC:DD:EE:FF")
+
+        assert result is True
+        mock_client._request.assert_called_once_with(
+            "POST",
+            "/api/s/{site}/cmd/stamgr",
+            json={"cmd": "forget-sta", "macs": ["aa:bb:cc:dd:ee:ff"]},
+        )
+
+    @pytest.mark.asyncio
+    async def test_authorize_guest(self, mock_client: UniFiClient) -> None:
+        """Test authorize_guest method without a session length."""
+        mock_client._request.return_value = []
+
+        result = await mock_client.authorize_guest("AA:BB:CC:DD:EE:FF")
+
+        assert result is True
+        mock_client._request.assert_called_once_with(
+            "POST",
+            "/api/s/{site}/cmd/stamgr",
+            json={"cmd": "authorize-guest", "mac": "aa:bb:cc:dd:ee:ff"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_authorize_guest_with_minutes(self, mock_client: UniFiClient) -> None:
+        """Test authorize_guest method with a session length."""
+        mock_client._request.return_value = []
+
+        result = await mock_client.authorize_guest("AA:BB:CC:DD:EE:FF", minutes=60)
+
+        assert result is True
+        mock_client._request.assert_called_once_with(
+            "POST",
+            "/api/s/{site}/cmd/stamgr",
+            json={
+                "cmd": "authorize-guest",
+                "mac": "aa:bb:cc:dd:ee:ff",
+                "minutes": 60,
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_unauthorize_guest(self, mock_client: UniFiClient) -> None:
+        """Test unauthorize_guest method."""
+        mock_client._request.return_value = []
+
+        result = await mock_client.unauthorize_guest("AA:BB:CC:DD:EE:FF")
+
+        assert result is True
+        mock_client._request.assert_called_once_with(
+            "POST",
+            "/api/s/{site}/cmd/stamgr",
+            json={"cmd": "unauthorize-guest", "mac": "aa:bb:cc:dd:ee:ff"},
+        )
+
+    @pytest.mark.asyncio
     async def test_get_site_health(self, mock_client: UniFiClient) -> None:
         """Test get_site_health method."""
         mock_client._request.return_value = [
@@ -422,3 +566,164 @@ class TestUniFiClientMethods:
 
         with pytest.raises(UniFiError, match="Firewall policy not found"):
             await mock_client.set_firewall_policy_enabled("missing", True)
+
+    @pytest.mark.asyncio
+    async def test_create_network(self, mock_client: UniFiClient) -> None:
+        """Test create_network method."""
+        mock_client._request.return_value = [{"_id": "net1", "name": "IoT"}]
+
+        result = await mock_client.create_network({"name": "IoT", "vlan": 20})
+
+        assert result == {"_id": "net1", "name": "IoT"}
+        mock_client._request.assert_called_once_with(
+            "POST",
+            "/api/s/{site}/rest/networkconf",
+            json={"name": "IoT", "vlan": 20},
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_network(self, mock_client: UniFiClient) -> None:
+        """Test update_network method."""
+        mock_client._request.return_value = []
+
+        result = await mock_client.update_network(
+            "net1", {"_id": "net1", "name": "IoT", "vlan": 21}
+        )
+
+        assert result is True
+        mock_client._request.assert_called_once_with(
+            "PUT",
+            "/api/s/{site}/rest/networkconf/net1",
+            json={"_id": "net1", "name": "IoT", "vlan": 21},
+        )
+
+    @pytest.mark.asyncio
+    async def test_delete_network(self, mock_client: UniFiClient) -> None:
+        """Test delete_network method."""
+        mock_client._request.return_value = []
+
+        result = await mock_client.delete_network("net1")
+
+        assert result is True
+        mock_client._request.assert_called_once_with(
+            "DELETE", "/api/s/{site}/rest/networkconf/net1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_firewall_rule(self, mock_client: UniFiClient) -> None:
+        """Test create_firewall_rule method."""
+        mock_client._request.return_value = [{"_id": "rule1", "name": "Block WAN"}]
+
+        result = await mock_client.create_firewall_rule(
+            {"name": "Block WAN", "ruleset": "WAN_IN", "action": "drop"}
+        )
+
+        assert result == {"_id": "rule1", "name": "Block WAN"}
+        mock_client._request.assert_called_once_with(
+            "POST",
+            "/api/s/{site}/rest/firewallrule",
+            json={"name": "Block WAN", "ruleset": "WAN_IN", "action": "drop"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_delete_firewall_rule(self, mock_client: UniFiClient) -> None:
+        """Test delete_firewall_rule method."""
+        mock_client._request.return_value = []
+
+        result = await mock_client.delete_firewall_rule("rule1")
+
+        assert result is True
+        mock_client._request.assert_called_once_with(
+            "DELETE", "/api/s/{site}/rest/firewallrule/rule1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_firewall_policy(self, mock_client: UniFiClient) -> None:
+        """Test create_firewall_policy method."""
+        mock_client._request_v2 = AsyncMock(
+            return_value=[{"_id": "policy1", "name": "Block Guest to LAN"}]
+        )
+
+        result = await mock_client.create_firewall_policy(
+            {"name": "Block Guest to LAN", "action": "BLOCK"}
+        )
+
+        assert result == {"_id": "policy1", "name": "Block Guest to LAN"}
+        mock_client._request_v2.assert_called_once_with(
+            "POST",
+            "/firewall-policies",
+            json={"name": "Block Guest to LAN", "action": "BLOCK"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_batch_update_firewall_policies(
+        self, mock_client: UniFiClient
+    ) -> None:
+        """Test batch_update_firewall_policies method."""
+        mock_client.get_firewall_policies = AsyncMock(
+            return_value=[
+                {"_id": "policy1", "name": "Block Guest to LAN", "predefined": False},
+            ]
+        )
+        mock_client._request_v2 = AsyncMock()
+        policies = [{"_id": "policy1", "name": "Block Guest to LAN", "enabled": False}]
+
+        result = await mock_client.batch_update_firewall_policies(policies)
+
+        assert result is True
+        mock_client._request_v2.assert_called_once_with(
+            "PUT", "/firewall-policies/batch", json=policies
+        )
+
+    @pytest.mark.asyncio
+    async def test_batch_update_firewall_policies_rejects_predefined(
+        self, mock_client: UniFiClient
+    ) -> None:
+        """Test batch_update_firewall_policies raises for predefined policies."""
+        mock_client.get_firewall_policies = AsyncMock(
+            return_value=[
+                {"_id": "policy1", "name": "Allow Established", "predefined": True},
+            ]
+        )
+        mock_client._request_v2 = AsyncMock()
+
+        with pytest.raises(UniFiError, match="Predefined firewall policies"):
+            await mock_client.batch_update_firewall_policies(
+                [{"_id": "policy1", "enabled": False}]
+            )
+        mock_client._request_v2.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_batch_delete_firewall_policies(
+        self, mock_client: UniFiClient
+    ) -> None:
+        """Test batch_delete_firewall_policies method."""
+        mock_client.get_firewall_policies = AsyncMock(
+            return_value=[
+                {"_id": "policy1", "name": "Block Guest to LAN", "predefined": False},
+            ]
+        )
+        mock_client._request_v2 = AsyncMock()
+
+        result = await mock_client.batch_delete_firewall_policies(["policy1"])
+
+        assert result is True
+        mock_client._request_v2.assert_called_once_with(
+            "POST", "/firewall-policies/batch-delete", json=["policy1"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_batch_delete_firewall_policies_rejects_predefined(
+        self, mock_client: UniFiClient
+    ) -> None:
+        """Test batch_delete_firewall_policies raises for predefined policies."""
+        mock_client.get_firewall_policies = AsyncMock(
+            return_value=[
+                {"_id": "policy1", "name": "Allow Established", "predefined": True},
+            ]
+        )
+        mock_client._request_v2 = AsyncMock()
+
+        with pytest.raises(UniFiError, match="Predefined firewall policies"):
+            await mock_client.batch_delete_firewall_policies(["policy1"])
+        mock_client._request_v2.assert_not_called()

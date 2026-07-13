@@ -31,19 +31,36 @@ class TestListTools:
         tool_names = [t.name for t in tools]
         assert "get_devices" in tool_names
         assert "restart_device" in tool_names
+        assert "adopt_device" in tool_names
+        assert "force_provision_device" in tool_names
+        assert "upgrade_device" in tool_names
+        assert "power_cycle_port" in tool_names
+        assert "set_device_locate" in tool_names
+        assert "unset_device_locate" in tool_names
         assert "get_clients" in tool_names
         assert "block_client" in tool_names
         assert "unblock_client" in tool_names
         assert "disconnect_client" in tool_names
+        assert "forget_client" in tool_names
+        assert "authorize_guest" in tool_names
+        assert "unauthorize_guest" in tool_names
         assert "get_sites" in tool_names
         assert "get_site_health" in tool_names
         assert "get_networks" in tool_names
+        assert "create_network" in tool_names
+        assert "update_network" in tool_names
+        assert "delete_network" in tool_names
         assert "get_device_activity" in tool_names
         assert "get_firewall_rules" in tool_names
         assert "enable_firewall_rule" in tool_names
         assert "disable_firewall_rule" in tool_names
+        assert "create_firewall_rule" in tool_names
+        assert "delete_firewall_rule" in tool_names
         assert "enable_firewall_policy" in tool_names
         assert "disable_firewall_policy" in tool_names
+        assert "create_firewall_policy" in tool_names
+        assert "batch_update_firewall_policies" in tool_names
+        assert "batch_delete_firewall_policies" in tool_names
 
     @pytest.mark.asyncio
     async def test_tools_have_descriptions(self) -> None:
@@ -121,6 +138,84 @@ class TestCallTool:
         assert "192.168.1.100" in result[0].text
 
     @pytest.mark.asyncio
+    async def test_call_adopt_device(self) -> None:
+        """Test calling adopt_device tool."""
+        mock_client = AsyncMock()
+        mock_client.adopt_device = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool("adopt_device", {"mac": "aa:bb:cc:dd:ee:ff"})
+
+        assert len(result) == 1
+        assert "Adopt" in result[0].text
+        mock_client.adopt_device.assert_called_once_with("aa:bb:cc:dd:ee:ff")
+
+    @pytest.mark.asyncio
+    async def test_call_force_provision_device(self) -> None:
+        """Test calling force_provision_device tool."""
+        mock_client = AsyncMock()
+        mock_client.force_provision_device = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool(
+                "force_provision_device", {"mac": "aa:bb:cc:dd:ee:ff"}
+            )
+
+        assert len(result) == 1
+        assert "Force-provision" in result[0].text
+        mock_client.force_provision_device.assert_called_once_with("aa:bb:cc:dd:ee:ff")
+
+    @pytest.mark.asyncio
+    async def test_call_upgrade_device(self) -> None:
+        """Test calling upgrade_device tool."""
+        mock_client = AsyncMock()
+        mock_client.upgrade_device = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool("upgrade_device", {"mac": "aa:bb:cc:dd:ee:ff"})
+
+        assert len(result) == 1
+        assert "Upgrade" in result[0].text
+        mock_client.upgrade_device.assert_called_once_with("aa:bb:cc:dd:ee:ff")
+
+    @pytest.mark.asyncio
+    async def test_call_power_cycle_port(self) -> None:
+        """Test calling power_cycle_port tool."""
+        mock_client = AsyncMock()
+        mock_client.power_cycle_port = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool(
+                "power_cycle_port", {"mac": "aa:bb:cc:dd:ee:ff", "port_idx": 3}
+            )
+
+        assert len(result) == 1
+        assert "Power-cycle" in result[0].text
+        mock_client.power_cycle_port.assert_called_once_with("aa:bb:cc:dd:ee:ff", 3)
+
+    @pytest.mark.asyncio
+    async def test_call_set_device_locate(self) -> None:
+        """Test calling set_device_locate tool."""
+        mock_client = AsyncMock()
+        mock_client.set_device_locate = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool("set_device_locate", {"mac": "aa:bb:cc:dd:ee:ff"})
+
+        assert len(result) == 1
+        assert "Locate LED enabled" in result[0].text
+        mock_client.set_device_locate.assert_called_once_with("aa:bb:cc:dd:ee:ff")
+
+    @pytest.mark.asyncio
+    async def test_call_unset_device_locate(self) -> None:
+        """Test calling unset_device_locate tool."""
+        mock_client = AsyncMock()
+        mock_client.unset_device_locate = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool(
+                "unset_device_locate", {"mac": "aa:bb:cc:dd:ee:ff"}
+            )
+
+        assert len(result) == 1
+        assert "Locate LED disabled" in result[0].text
+        mock_client.unset_device_locate.assert_called_once_with("aa:bb:cc:dd:ee:ff")
+
+    @pytest.mark.asyncio
     async def test_call_block_client(self) -> None:
         """Test calling block_client tool."""
         mock_client = AsyncMock()
@@ -131,6 +226,89 @@ class TestCallTool:
         assert len(result) == 1
         assert "blocked" in result[0].text
         mock_client.block_client.assert_called_once_with("aa:bb:cc:dd:ee:ff")
+
+    @pytest.mark.asyncio
+    async def test_call_forget_client(self) -> None:
+        """Test calling forget_client tool."""
+        mock_client = AsyncMock()
+        mock_client.forget_client = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool("forget_client", {"mac": "aa:bb:cc:dd:ee:ff"})
+
+        assert len(result) == 1
+        assert "forgotten" in result[0].text
+        mock_client.forget_client.assert_called_once_with("aa:bb:cc:dd:ee:ff")
+
+    @pytest.mark.asyncio
+    async def test_call_authorize_guest(self) -> None:
+        """Test calling authorize_guest tool."""
+        mock_client = AsyncMock()
+        mock_client.authorize_guest = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool(
+                "authorize_guest", {"mac": "aa:bb:cc:dd:ee:ff", "minutes": 60}
+            )
+
+        assert len(result) == 1
+        assert "authorized" in result[0].text
+        mock_client.authorize_guest.assert_called_once_with("aa:bb:cc:dd:ee:ff", 60)
+
+    @pytest.mark.asyncio
+    async def test_call_unauthorize_guest(self) -> None:
+        """Test calling unauthorize_guest tool."""
+        mock_client = AsyncMock()
+        mock_client.unauthorize_guest = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool("unauthorize_guest", {"mac": "aa:bb:cc:dd:ee:ff"})
+
+        assert len(result) == 1
+        assert "revoked" in result[0].text
+        mock_client.unauthorize_guest.assert_called_once_with("aa:bb:cc:dd:ee:ff")
+
+    @pytest.mark.asyncio
+    async def test_call_create_network(self) -> None:
+        """Test calling create_network tool."""
+        mock_client = AsyncMock()
+        mock_client.create_network = AsyncMock(
+            return_value={"_id": "net1", "name": "IoT"}
+        )
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool(
+                "create_network", {"network": {"name": "IoT", "vlan": 20}}
+            )
+
+        assert len(result) == 1
+        assert "IoT" in result[0].text
+        mock_client.create_network.assert_called_once_with({"name": "IoT", "vlan": 20})
+
+    @pytest.mark.asyncio
+    async def test_call_update_network(self) -> None:
+        """Test calling update_network tool."""
+        mock_client = AsyncMock()
+        mock_client.update_network = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool(
+                "update_network",
+                {"network_id": "net1", "network": {"name": "IoT", "vlan": 21}},
+            )
+
+        assert len(result) == 1
+        assert "updated" in result[0].text
+        mock_client.update_network.assert_called_once_with(
+            "net1", {"name": "IoT", "vlan": 21}
+        )
+
+    @pytest.mark.asyncio
+    async def test_call_delete_network(self) -> None:
+        """Test calling delete_network tool."""
+        mock_client = AsyncMock()
+        mock_client.delete_network = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool("delete_network", {"network_id": "net1"})
+
+        assert len(result) == 1
+        assert "deleted" in result[0].text
+        mock_client.delete_network.assert_called_once_with("net1")
 
     @pytest.mark.asyncio
     async def test_call_get_device_activity(self) -> None:
@@ -231,6 +409,37 @@ class TestCallTool:
         mock_client.set_firewall_rule_enabled.assert_called_once_with("rule1", False)
 
     @pytest.mark.asyncio
+    async def test_call_create_firewall_rule(self) -> None:
+        """Test calling create_firewall_rule tool."""
+        mock_client = AsyncMock()
+        mock_client.create_firewall_rule = AsyncMock(
+            return_value={"_id": "rule1", "name": "Block WAN"}
+        )
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool(
+                "create_firewall_rule",
+                {"rule": {"name": "Block WAN", "ruleset": "WAN_IN"}},
+            )
+
+        assert len(result) == 1
+        assert "Block WAN" in result[0].text
+        mock_client.create_firewall_rule.assert_called_once_with(
+            {"name": "Block WAN", "ruleset": "WAN_IN"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_call_delete_firewall_rule(self) -> None:
+        """Test calling delete_firewall_rule tool."""
+        mock_client = AsyncMock()
+        mock_client.delete_firewall_rule = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool("delete_firewall_rule", {"rule_id": "rule1"})
+
+        assert len(result) == 1
+        assert "deleted" in result[0].text
+        mock_client.delete_firewall_rule.assert_called_once_with("rule1")
+
+    @pytest.mark.asyncio
     async def test_call_enable_firewall_policy(self) -> None:
         """Test calling enable_firewall_policy tool."""
         mock_client = AsyncMock()
@@ -257,6 +466,54 @@ class TestCallTool:
         mock_client.set_firewall_policy_enabled.assert_called_once_with(
             "policy1", False
         )
+
+    @pytest.mark.asyncio
+    async def test_call_create_firewall_policy(self) -> None:
+        """Test calling create_firewall_policy tool."""
+        mock_client = AsyncMock()
+        mock_client.create_firewall_policy = AsyncMock(
+            return_value={"_id": "policy1", "name": "Block Guest to LAN"}
+        )
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool(
+                "create_firewall_policy",
+                {"policy": {"name": "Block Guest to LAN", "action": "BLOCK"}},
+            )
+
+        assert len(result) == 1
+        assert "Block Guest to LAN" in result[0].text
+        mock_client.create_firewall_policy.assert_called_once_with(
+            {"name": "Block Guest to LAN", "action": "BLOCK"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_call_batch_update_firewall_policies(self) -> None:
+        """Test calling batch_update_firewall_policies tool."""
+        mock_client = AsyncMock()
+        mock_client.batch_update_firewall_policies = AsyncMock()
+        policies = [{"_id": "policy1", "enabled": False}]
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool(
+                "batch_update_firewall_policies", {"policies": policies}
+            )
+
+        assert len(result) == 1
+        assert "Updated 1" in result[0].text
+        mock_client.batch_update_firewall_policies.assert_called_once_with(policies)
+
+    @pytest.mark.asyncio
+    async def test_call_batch_delete_firewall_policies(self) -> None:
+        """Test calling batch_delete_firewall_policies tool."""
+        mock_client = AsyncMock()
+        mock_client.batch_delete_firewall_policies = AsyncMock()
+        with patch("unifi_mcp.server._get_client", AsyncMock(return_value=mock_client)):
+            result = await call_tool(
+                "batch_delete_firewall_policies", {"policy_ids": ["policy1"]}
+            )
+
+        assert len(result) == 1
+        assert "Deleted 1" in result[0].text
+        mock_client.batch_delete_firewall_policies.assert_called_once_with(["policy1"])
 
 
 class TestClientLifecycle:
