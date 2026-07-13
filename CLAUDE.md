@@ -30,15 +30,40 @@ uv pip install -e ".[dev]"
 ```
 src/
   unifi_mcp/
-    __init__.py      # Package initialization
-    server.py        # MCP server implementation and tool definitions
-    unifi_client.py  # UniFi API client
-    resources/       # MCP resources definitions
+    __init__.py         # Package initialization
+    server/              # MCP server, split by domain
+      __init__.py         # Tool registry, dispatch (list_tools/call_tool), client lifecycle, main
+      _schema.py           # ToolSpec dataclass + shared property schema constants
+      _formatting.py        # Formatting helpers shared across domains (bytes, uptime, client lines)
+      _devices.py            # Device tool handlers/formatters + cmd/devmgr commands
+      _clients.py             # Client tool handlers/formatters + cmd/stamgr commands
+      _sites.py                 # Site tool handlers/formatters
+      _networks.py               # Network config CRUD tool handlers/formatters
+      _firewall.py                # Legacy firewall rules + zone-based policy tool handlers/formatters
+    unifi_client/        # UniFi API client, split by domain
+      __init__.py         # Re-exports UniFiClient and exception types
+      _base.py             # Connection lifecycle, auth, request plumbing
+      client.py             # UniFiClient (composes the mixins below)
+      _devices.py            # Device inventory + cmd/devmgr commands
+      _clients.py             # Connected-client inventory + cmd/stamgr commands
+      _sites.py                # Site inventory and health
+      _networks.py              # Network configuration CRUD
+      _firewall.py               # Legacy firewall rules + zone-based policies
+    resources/           # MCP resources definitions
 tests/
-  test_*.py          # Test files
+  test_server_registry.py     # list_tools/call_tool dispatch + client lifecycle
+  test_server_formatting.py   # Shared formatting helpers
+  test_server_<domain>.py     # Server tests, split by the same domains as server/
+  test_client_<domain>.py     # Client tests, split by the same domains as unifi_client/
 docs/
   *.md               # Documentation files
 ```
+
+Adding a new UniFi API domain (e.g. a new REST resource)? Add a `_<domain>.py`
+mixin under `unifi_client/`, mix it into `UniFiClient` in `unifi_client/client.py`,
+add a matching `server/_<domain>.py` (handlers + formatters + a `<DOMAIN>_TOOLS`
+list of `ToolSpec`s) wired into `TOOLS` in `server/__init__.py`, and add matching
+`tests/test_client_<domain>.py` / `tests/test_server_<domain>.py` files.
 
 ## Code Style
 

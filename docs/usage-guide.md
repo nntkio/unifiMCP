@@ -316,5 +316,5 @@ there's no per-call site override.
 See [`CLAUDE.md`](../CLAUDE.md) for the test/lint workflow (`pytest`,
 `ruff check .`, `ruff format .`) and branching conventions. See
 [`unifi-api.md`](./unifi-api.md) for the underlying UniFi Controller HTTP API
-reference (endpoints, auth, response format, WebSocket events) that
-`unifi_client.py` wraps.
+reference (endpoints, auth, response format, WebSocket events) that the
+`unifi_client/` package wraps.
