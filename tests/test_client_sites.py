@@ -33,3 +33,13 @@ class TestUniFiClientSites:
 
         assert len(result) == 2
         mock_client._request.assert_called_once_with("GET", "/api/s/{site}/stat/health")
+
+    @pytest.mark.asyncio
+    async def test_get_sdn_status(self, mock_client: UniFiClient) -> None:
+        """Test get_sdn_status method."""
+        mock_client._request.return_value = [{"state": "connected"}]
+
+        result = await mock_client.get_sdn_status()
+
+        assert len(result) == 1
+        mock_client._request.assert_called_once_with("GET", "/api/s/{site}/stat/sdn")

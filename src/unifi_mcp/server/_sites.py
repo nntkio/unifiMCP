@@ -17,6 +17,10 @@ async def _handle_get_site_health(
     return format_health(await client.get_site_health())
 
 
+async def _handle_get_sdn_status(client: UniFiClient, arguments: dict[str, Any]) -> str:
+    return format_sdn_status(await client.get_sdn_status())
+
+
 # Formatting helpers
 def format_sites(sites: list[dict[str, Any]]) -> str:
     """Format site list for display."""
@@ -74,6 +78,24 @@ def format_health(health: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def format_sdn_status(status: list[dict[str, Any]]) -> str:
+    """Format SDN (Site Manager) status for display."""
+    if not status:
+        return "No SDN status data available."
+
+    lines = ["SDN Status:\n"]
+    for entry in status:
+        state = entry.get("state", entry.get("status", "unknown"))
+        lines.append(f"- State: {state}")
+        for key, value in entry.items():
+            if key in ("state", "status"):
+                continue
+            lines.append(f"  {key}: {value}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 SITE_TOOLS: list[ToolSpec] = [
     ToolSpec(
         name="get_sites",
@@ -86,5 +108,11 @@ SITE_TOOLS: list[ToolSpec] = [
         description="Get health status for the current site",
         input_schema={"type": "object", "properties": {}, "required": []},
         handler=_handle_get_site_health,
+    ),
+    ToolSpec(
+        name="get_sdn_status",
+        description="Get the cloud-managed SDN (Site Manager) connection status for the site",
+        input_schema={"type": "object", "properties": {}, "required": []},
+        handler=_handle_get_sdn_status,
     ),
 ]

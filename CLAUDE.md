@@ -37,18 +37,20 @@ src/
       _formatting.py        # Formatting helpers shared across domains (bytes, uptime, client lines)
       _devices.py            # Device tool handlers/formatters + cmd/devmgr commands
       _clients.py             # Client tool handlers/formatters + cmd/stamgr commands
-      _sites.py                 # Site tool handlers/formatters
+      _sites.py                 # Site tool handlers/formatters + SDN status
       _networks.py               # Network config CRUD tool handlers/formatters
-      _firewall.py                # Legacy firewall rules + zone-based policy tool handlers/formatters
+      _firewall.py                # Legacy firewall rules + zone-based policies/zones/zone matrix
+      _<domain>.py                # One file per additional domain (see below), same shape
     unifi_client/        # UniFi API client, split by domain
       __init__.py         # Re-exports UniFiClient and exception types
       _base.py             # Connection lifecycle, auth, request plumbing
       client.py             # UniFiClient (composes the mixins below)
       _devices.py            # Device inventory + cmd/devmgr commands
       _clients.py             # Connected-client inventory + cmd/stamgr commands
-      _sites.py                # Site inventory and health
+      _sites.py                # Site inventory, health, and SDN status
       _networks.py              # Network configuration CRUD
-      _firewall.py               # Legacy firewall rules + zone-based policies
+      _firewall.py               # Legacy firewall rules + zone-based policies/zones/zone matrix
+      _<domain>.py                # One file per additional domain (see below), same shape
     resources/           # MCP resources definitions
 tests/
   test_server_registry.py     # list_tools/call_tool dispatch + client lifecycle
@@ -58,6 +60,13 @@ tests/
 docs/
   *.md               # Documentation files
 ```
+
+Additional domains beyond the original 5 (each following the same
+`unifi_client/_<domain>.py` + `server/_<domain>.py` + matching test-file
+pattern): firewall groups, legacy traffic rules, traffic routes, QoS rules,
+NAT rules, port forwarding, static routes, WLANs, port profiles, RADIUS
+profiles, WAN SLA profiles, WLAN rate profiles, network objects, and
+object-oriented network configs.
 
 Adding a new UniFi API domain (e.g. a new REST resource)? Add a `_<domain>.py`
 mixin under `unifi_client/`, mix it into `UniFiClient` in `unifi_client/client.py`,
