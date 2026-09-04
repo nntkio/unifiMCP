@@ -12,7 +12,13 @@ def check_root_credentials(username: str, password: str) -> bool:
     these environment variables, so it structurally cannot own a token.
     """
     root_username = os.environ.get("ROOT_ADMIN_USERNAME", "root")
-    root_password = os.environ["ROOT_ADMIN_PASSWORD"]
+    root_password = os.environ.get("ROOT_ADMIN_PASSWORD")
+    if not root_password:
+        # main() refuses to start without ROOT_ADMIN_PASSWORD, so this only
+        # happens when build_app is used directly (e.g. in tests). Fail
+        # closed rather than raising: login_submit calls this on every
+        # attempt, including regular-account logins that don't involve root.
+        return False
     username_matches = hmac.compare_digest(username, root_username)
     password_matches = hmac.compare_digest(password, root_password)
     return username_matches and password_matches
