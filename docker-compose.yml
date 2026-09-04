@@ -5,6 +5,34 @@ services:
     container_name: unifi-mcp
     env_file:
       - .env
-    stdin_open: true
-    tty: true
+    ports:
+      - "8765:8765"
+    volumes:
+      - unifi-mcp-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8765/healthz')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
+
+  unifi-mcp-admin:
+    image: unifi-mcp:latest
+    container_name: unifi-mcp-admin
+    command: ["unifi-mcp-admin"]
+    env_file:
+      - .env
+    ports:
+      - "8766:8766"
+    volumes:
+      - unifi-mcp-data:/data
+    restart: unless-stopped
+
+volumes:
+  unifi-mcp-data:
