@@ -27,6 +27,7 @@ dev = [
 
 [project.scripts]
 unifi-mcp = "unifi_mcp.server:main"
+unifi-mcp-admin = "unifi_mcp.admin:main"
 
 [build-system]
 requires = ["hatchling"]

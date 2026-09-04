@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+<head><title>My Tokens — UnifiMCP Token Admin</title></head>
+<body>
+  <h1>My Tokens</h1>
+  <form method="post" action="/logout"><button type="submit">Log out</button></form>
+
+  {% if error %}<p style="color: red;">{{ error }}</p>{% endif %}
+  {% if new_token %}
+    <p style="color: green;">
+      New token — copy it now, it will not be shown again:<br>
+      <code>{{ new_token }}</code>
+    </p>
+  {% endif %}
+
+  <h2>Create a token</h2>
+  <form method="post" action="/tokens">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Label <input type="text" name="label" required></label><br>
+    <label>Expiry
+      <select name="expiry_preset">
+        <option value="30d">30 days</option>
+        <option value="90d">90 days</option>
+        <option value="365d">365 days</option>
+        <option value="never">Never</option>
+        <option value="custom">Custom date</option>
+      </select>
+    </label>
+    <label>Custom date (if "Custom date" selected above)
+      <input type="date" name="custom_date">
+    </label><br>
+    <button type="submit">Create token</button>
+  </form>
+
+  <h2>Existing tokens</h2>
+  <table border="1">
+    <tr><th>Label</th><th>Created</th><th>Expires</th><th>Revoked</th><th></th></tr>
+    {% for token in tokens %}
+    <tr>
+      <td>{{ token.label }}</td>
+      <td>{{ token.created_at }}</td>
+      <td>{{ token.expires_at or "Never" }}</td>
+      <td>{{ token.revoked_at or "Active" }}</td>
+      <td>
+        {% if not token.revoked_at %}
+        <form method="post" action="/tokens/{{ token.id }}/revoke">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit">Revoke</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</body>
+</html>

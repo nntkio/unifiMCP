@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head><title>Admin — UnifiMCP Token Admin</title></head>
+<body>
+  <h1>Admin</h1>
+  <form method="post" action="/logout"><button type="submit">Log out</button></form>
+
+  {% if error %}<p style="color: red;">{{ error }}</p>{% endif %}
+
+  <h2>Create an account</h2>
+  <form method="post" action="/admin/accounts">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Username <input type="text" name="username" required></label><br>
+    <label>Temporary password
+      <input type="text" name="temp_password" required>
+    </label><br>
+    <button type="submit">Create account</button>
+  </form>
+
+  <h2>All tokens</h2>
+  <table border="1">
+    <tr>
+      <th>Owner</th><th>Label</th><th>Created</th><th>Expires</th>
+      <th>Revoked</th><th></th>
+    </tr>
+    {% for token in tokens %}
+    <tr>
+      <td>{{ token.owner_username }}</td>
+      <td>{{ token.label }}</td>
+      <td>{{ token.created_at }}</td>
+      <td>{{ token.expires_at or "Never" }}</td>
+      <td>{{ token.revoked_at or "Active" }}</td>
+      <td>
+        {% if not token.revoked_at %}
+        <form method="post" action="/admin/tokens/{{ token.id }}/revoke">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit">Revoke</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</body>
+</html>
