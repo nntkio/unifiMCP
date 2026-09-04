@@ -1,11 +1,13 @@
 """Tests for the Streamable HTTP transport (server/_http.py)."""
 
-from unittest.mock import AsyncMock
+import os
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from mcp.server import Server
 from starlette.testclient import TestClient
 
+from unifi_mcp import server as server_module
 from unifi_mcp.server._http import build_app
 from unifi_mcp.tokens import TokenStore
 
@@ -129,3 +131,26 @@ class TestBearerAuthMiddleware:
 
         assert response.status_code == 200
         assert '"serverInfo"' in response.text
+
+
+class TestMainTransportDispatch:
+    def teardown_method(self) -> None:
+        os.environ.pop("MCP_TRANSPORT", None)
+
+    def test_main_dispatches_to_http_when_configured(self):
+        os.environ["MCP_TRANSPORT"] = "http"
+
+        with patch("unifi_mcp.server._http.run_http") as mock_run_http:
+            server_module.main()
+
+        mock_run_http.assert_called_once_with(
+            server_module.server, server_module._close_client
+        )
+
+    def test_main_dispatches_to_stdio_by_default(self):
+        os.environ.pop("MCP_TRANSPORT", None)
+
+        with patch("unifi_mcp.server.asyncio.run") as mock_asyncio_run:
+            server_module.main()
+
+        mock_asyncio_run.assert_called_once()

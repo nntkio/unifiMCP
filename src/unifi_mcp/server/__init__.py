@@ -7,6 +7,7 @@ client lifecycle and MCP dispatch (`list_tools`, `call_tool`, `main`).
 """
 
 import asyncio
+import os
 from typing import Any
 
 from mcp.server import Server
@@ -206,7 +207,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
 
 def main() -> None:
-    """Run the MCP server."""
+    """Run the MCP server using the transport selected by MCP_TRANSPORT."""
+    if os.environ.get("MCP_TRANSPORT", "stdio") == "http":
+        from unifi_mcp.server._http import run_http
+
+        run_http(server, _close_client)
+        return
 
     async def run() -> None:
         async with stdio_server() as (read_stream, write_stream):
