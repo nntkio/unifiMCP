@@ -1,0 +1,49 @@
+# UnifiMCP deployment for QNAP Container Station.
+#
+# Unlike the repo-root docker-compose.yml (which builds the image locally),
+# this file pulls a prebuilt multi-arch image from GitHub Container Registry,
+# so the NAS never needs the source tree or a build toolchain.
+#
+#   docker compose -f docker-compose.qnap.yml --env-file qnap.env pull
+#   docker compose -f docker-compose.qnap.yml --env-file qnap.env up -d
+#
+# If the ghcr.io package is private, authenticate on the NAS first:
+#   docker login ghcr.io -u <github-username>   # PAT with read:packages
+
+services:
+  unifi-mcp:
+    image: ghcr.io/nntkio/unifi-mcp:latest
+    container_name: unifi-mcp
+    env_file:
+      - qnap.env
+    ports:
+      - "8765:8765"
+    volumes:
+      - unifi-mcp-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8765/healthz')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  unifi-mcp-admin:
+    image: ghcr.io/nntkio/unifi-mcp:latest
+    container_name: unifi-mcp-admin
+    command: ["unifi-mcp-admin"]
+    env_file:
+      - qnap.env
+    ports:
+      - "8766:8766"
+    volumes:
+      - unifi-mcp-data:/data
+    restart: unless-stopped
+
+volumes:
+  unifi-mcp-data:
