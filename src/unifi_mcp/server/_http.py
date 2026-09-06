@@ -17,11 +17,30 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Mount, Route
-from starlette.types import Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from unifi_mcp.tokens import TokenStore
 
 HEALTH_PATH = "/healthz"
+MCP_PATH = "/mcp"
+
+
+class NormalizeMcpPath:
+    """Serve the MCP endpoint at ``/mcp`` as well as ``/mcp/``.
+
+    ``Mount("/mcp")`` only matches ``/mcp/...``, so a bare ``POST /mcp``
+    otherwise gets a 307 redirect to ``/mcp/``. Clients that don't follow
+    redirects on POST fail outright against the documented URL, so rewrite
+    the bare path instead of bouncing the request.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["path"] == MCP_PATH:
+            scope = dict(scope, path=MCP_PATH + "/")
+        await self.app(scope, receive, send)
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
@@ -72,9 +91,12 @@ def build_app(
     return Starlette(
         routes=[
             Route(HEALTH_PATH, _healthz),
-            Mount("/mcp", app=handle_mcp),
+            Mount(MCP_PATH, app=handle_mcp),
         ],
-        middleware=[Middleware(BearerAuthMiddleware, token_store=token_store)],
+        middleware=[
+            Middleware(NormalizeMcpPath),
+            Middleware(BearerAuthMiddleware, token_store=token_store),
+        ],
         lifespan=lifespan,
     )
 

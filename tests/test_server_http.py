@@ -154,3 +154,37 @@ class TestMainTransportDispatch:
             server_module.main()
 
         mock_asyncio_run.assert_called_once()
+
+
+class TestMcpPathWithoutTrailingSlash:
+    def test_bare_mcp_path_is_served_not_redirected(self, mcp_server, token_store):
+        # Starlette's Mount("/mcp") only matches "/mcp/...", so a bare
+        # POST /mcp would 307 to /mcp/. TestClient follows redirects by
+        # default and hides that, so this asserts with following disabled:
+        # a client that doesn't follow redirects on POST must still work.
+        store, owner_id = token_store
+        raw_token = store.create_token(owner_id, "test-token", None)
+        app = build_app(mcp_server, store, AsyncMock())
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "test", "version": "1"},
+                    },
+                },
+                headers={
+                    "Authorization": f"Bearer {raw_token}",
+                    "Accept": "application/json, text/event-stream",
+                },
+                follow_redirects=False,
+            )
+
+        assert response.status_code == 200
+        assert '"serverInfo"' in response.text
