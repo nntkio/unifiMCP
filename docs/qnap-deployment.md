@@ -207,8 +207,34 @@ Create **two** proxy hosts:
 
 | Proxy host | Forward to | Advanced config needed |
 |------------|-----------|------------------------|
-| `unifi-mcp.<domain>` | `<nas-ip>` : `8765` | Yes — see below |
-| `unifi-mcp-admin.<domain>` | `<nas-ip>` : `8766` | No |
+| `unifi-mcp.seeg.io` | `172.16.25.50` : `8765` | Yes — see below |
+| `unifi-mcp-admin.seeg.io` | `172.16.25.50` : `8766` | No |
+
+### DNS records and certificate issuance
+
+Point both names at the **reverse proxy**, not at the NAS:
+
+| Record | Value |
+|--------|-------|
+| `unifi-mcp.seeg.io` | the proxy host's IP (e.g. `172.16.25.190`) |
+| `unifi-mcp-admin.seeg.io` | the proxy host's IP |
+
+If the proxy sits on a private address, these must be **DNS-only** records
+(in Cloudflare, the grey cloud — not the orange one). Cloudflare cannot
+proxy traffic to an RFC1918 address, and turning proxying on for such a
+record produces errors that look like proxy or certificate faults.
+
+**A private IP forces a DNS-01 challenge.** Let's Encrypt validates HTTP-01
+by connecting to the name from the public internet; if it resolves to
+`172.16.x.x` — or resolves only on your internal network — that connection
+cannot succeed, and issuance fails with a connection or timeout error that
+is easy to misread as an nginx misconfiguration.
+
+In nginx-proxy-manager's SSL tab, tick **Use a DNS Challenge**, choose the
+provider hosting the zone, and supply an API token scoped to edit DNS for
+that zone (for Cloudflare: `Zone:DNS:Edit` plus `Zone:Zone:Read`). This
+never requires inbound reachability, so it works for a service published
+only inside your network.
 
 ### Proxy host settings — MCP endpoint (8765)
 
@@ -216,7 +242,7 @@ Create **two** proxy hosts:
 
 | Field | Value |
 |-------|-------|
-| Domain Names | `unifi-mcp.<domain>` |
+| Domain Names | `unifi-mcp.seeg.io` |
 | Scheme | `http` |
 | Forward Hostname / IP | your NAS IP |
 | Forward Port | `8765` |
@@ -261,7 +287,7 @@ Repeat the direct checks against the proxied hostnames — the proxy is a new
 component and inherits none of the guarantees you established in section 3.
 
 ```bash
-MCPHOST=https://unifi-mcp.<domain>
+MCPHOST=https://unifi-mcp.seeg.io
 
 curl -i $MCPHOST/healthz
 curl -s -o /dev/null -w '%{http_code}\n' -X POST $MCPHOST/mcp
@@ -295,7 +321,7 @@ Once proxied, point clients at the HTTPS URL:
 {
   "mcpServers": {
     "unifi": {
-      "url": "https://unifi-mcp.<domain>/mcp",
+      "url": "https://unifi-mcp.seeg.io/mcp",
       "headers": { "Authorization": "Bearer <token>" }
     }
   }
