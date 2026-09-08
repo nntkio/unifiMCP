@@ -1,0 +1,64 @@
+# Paste-ready variant for QNAP Container Station's "Create Application" UI.
+#
+# Container Station pastes YAML into its own working directory, where a
+# sibling qnap.env file usually isn't resolvable — so this variant inlines
+# the settings with `environment:` instead of `env_file:`.
+#
+# Fill in every <...> placeholder before creating the application. Note that
+# these values are stored in Container Station's application config, so the
+# controller password and root admin password are visible to anyone with NAS
+# admin access. If you'd rather keep them out of the UI, enable SSH on the
+# NAS and use deploy/docker-compose.qnap.yml with a qnap.env file instead.
+
+services:
+  unifi-mcp:
+    image: ghcr.io/nntkio/unifi-mcp:latest
+    container_name: unifi-mcp
+    environment:
+      UNIFI_HOST: "<https://your-controller>"
+      UNIFI_USERNAME: "<username>"
+      UNIFI_PASSWORD: "<password>"
+      UNIFI_SITE: "default"
+      UNIFI_VERIFY_SSL: "false"
+      UNIFI_IS_UNIFI_OS: "true"
+      MCP_TRANSPORT: "http"
+      MCP_HTTP_HOST: "0.0.0.0"
+      MCP_HTTP_PORT: "8765"
+      TOKEN_DB_PATH: "/data/tokens.db"
+    ports:
+      - "8765:8765"
+    volumes:
+      - unifi-mcp-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8765/healthz')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  unifi-mcp-admin:
+    image: ghcr.io/nntkio/unifi-mcp:latest
+    container_name: unifi-mcp-admin
+    command: ["unifi-mcp-admin"]
+    environment:
+      TOKEN_DB_PATH: "/data/tokens.db"
+      ROOT_ADMIN_USERNAME: "root"
+      ROOT_ADMIN_PASSWORD: "<strong-password>"
+      # python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+      ADMIN_SESSION_SECRET: "<generated-secret>"
+      ADMIN_HTTP_HOST: "0.0.0.0"
+      ADMIN_HTTP_PORT: "8766"
+    ports:
+      - "8766:8766"
+    volumes:
+      - unifi-mcp-data:/data
+    restart: unless-stopped
+
+volumes:
+  unifi-mcp-data:
