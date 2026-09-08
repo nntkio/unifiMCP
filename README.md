@@ -190,7 +190,7 @@ e.g.:
 {
   "mcpServers": {
     "unifi": {
-      "url": "http://172.16.25.50:8765/mcp",
+      "url": "http://<nas-host>:8765/mcp",
       "headers": {
         "Authorization": "Bearer <token from the token-admin service>"
       }
