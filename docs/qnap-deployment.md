@@ -61,6 +61,28 @@ Fill in `qnap.env`:
 `MCP_TRANSPORT=http` is the setting that switches the server off stdio;
 without it the container starts a stdio server that nothing can reach.
 
+## 2b. Alternative: deploy through the Container Station UI
+
+If SSH is disabled on the NAS, create the application from Container
+Station's web UI instead. Its "Create Application" box pastes YAML into its
+own working directory, where a sibling `qnap.env` usually will not resolve —
+so use `deploy/docker-compose.container-station.yml`, which inlines the
+settings with `environment:` rather than `env_file:`.
+
+1. Container Station → **Applications** → **Create**.
+2. Paste the contents of `deploy/docker-compose.container-station.yml`.
+3. Replace every `<...>` placeholder — controller URL and credentials,
+   `ROOT_ADMIN_PASSWORD`, and a generated `ADMIN_SESSION_SECRET`.
+4. **Create**, then continue from section 3 to verify.
+
+Be aware that Container Station stores these values in its application
+config, so the controller password and root admin password are readable by
+anyone with NAS admin access. The `env_file` approach in section 2 keeps
+them in a file you control instead.
+
+If the image is a private package, add your ghcr.io credentials to Container
+Station's registry list first, or the pull fails with an auth error.
+
 ## 3. Start the services
 
 ```bash
