@@ -16,6 +16,10 @@ They share a Docker named volume (`unifi-mcp-data`) holding the SQLite token
 database, so the admin service writes tokens the MCP server can validate
 without any network call between them.
 
+Both listen on plain HTTP. If you have a reverse proxy terminating TLS (see
+"Fronting with a reverse proxy" below), point clients at that instead of at
+the NAS directly.
+
 ## 1. Publish the image
 
 Built and pushed from a workstation, not the NAS:
@@ -135,13 +139,68 @@ revoke anyone's token from `/admin`.
 Check your client's documentation for its exact remote-server config shape;
 the fields above are what a Streamable HTTP client needs.
 
+## Fronting with a reverse proxy (TLS)
+
+The services speak plain HTTP, so put them behind a proxy that terminates
+TLS rather than exposing 8765/8766 directly. With nginx-proxy-manager,
+create one proxy host per service:
+
+| Proxy host | Forward to | Purpose |
+|------------|-----------|---------|
+| `unifi-mcp.<your-domain>` | `<nas-ip>` : `8765` | MCP endpoint |
+| `unifi-mcp-admin.<your-domain>` | `<nas-ip>` : `8766` | Token admin UI |
+
+Request a certificate for each, and enable **Force SSL**.
+
+**Critical for the MCP host:** the Streamable HTTP transport streams
+responses as Server-Sent Events. nginx buffers proxied responses by default,
+which makes an MCP client hang waiting for data that is sitting in the
+proxy's buffer. In the proxy host's **Advanced** tab, add:
+
+```nginx
+proxy_buffering off;
+proxy_cache off;
+proxy_read_timeout 3600s;
+proxy_send_timeout 3600s;
+chunked_transfer_encoding on;
+```
+
+Without `proxy_buffering off`, the endpoint appears to connect and then
+stall — the request never visibly fails, which makes it easy to misdiagnose
+as an auth or client problem.
+
+The admin UI needs no special settings; it is ordinary form-post HTML.
+
+Once proxied, clients use the HTTPS URL:
+
+```json
+{
+  "mcpServers": {
+    "unifi": {
+      "url": "https://unifi-mcp.<your-domain>/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+Verify the proxied path end to end, not just the direct one:
+
+```bash
+curl https://unifi-mcp.<your-domain>/healthz     # expect: ok
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  https://unifi-mcp.<your-domain>/mcp            # expect: 401
+```
+
 ## Security notes
 
-- **Traffic is plain HTTP.** Admin passwords and freshly minted tokens cross
-  the LAN in cleartext. This is an explicit non-goal of the current design
-  (see `docs/superpowers/specs/2026-07-13-http-transport-design.md`). Put
-  both ports behind a reverse proxy with TLS before exposing them beyond a
-  trusted network, and never port-forward 8765/8766 from the internet.
+- **The services themselves speak plain HTTP.** TLS is an explicit non-goal
+  of the current design (see
+  `docs/superpowers/specs/2026-07-13-http-transport-design.md`) — it is
+  expected to come from a reverse proxy in front. Until you have one, admin
+  passwords and freshly minted tokens cross the LAN in cleartext. Never
+  port-forward 8765/8766 from the internet; expose only the proxied HTTPS
+  hosts.
 - A valid token grants **everything the MCP server can do**, including
   mutating operations like restarting devices and changing firewall rules.
   There is no per-token scoping. Prefer short expiries.
@@ -173,3 +232,9 @@ required, and the service refuses to start without them.
 **Every MCP request returns 401** — the token is unknown, revoked, or
 expired, or `TOKEN_DB_PATH` differs between the two services. Both must
 point at the same file on the shared volume (`/data/tokens.db`).
+
+**MCP client connects but then hangs with no response** — a reverse proxy is
+buffering the SSE stream. Set `proxy_buffering off` on the proxy host (see
+"Fronting with a reverse proxy"). Confirm by testing the NAS directly on
+`http://<nas-ip>:8765/mcp`: if that works and the proxied URL hangs, the
+proxy is the cause.
