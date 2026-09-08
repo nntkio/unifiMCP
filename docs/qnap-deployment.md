@@ -87,26 +87,84 @@ them in a file you control instead.
 If the image is a private package, add your ghcr.io credentials to Container
 Station's registry list first, or the pull fails with an auth error.
 
-## 3. Start the services
+## 3. Start the services and verify directly
+
+Verify against the NAS directly **before** putting a proxy in front. If you
+only ever test the proxied URL, a failure leaves you unable to tell whether
+the container or the proxy is at fault.
+
+If you deployed from a shell rather than the Container Station UI:
 
 ```bash
 docker compose -f docker-compose.qnap.yml --env-file qnap.env pull
 docker compose -f docker-compose.qnap.yml --env-file qnap.env up -d
 ```
 
-Verify the MCP server is healthy — this endpoint is deliberately
-unauthenticated so the Docker healthcheck works:
+Set the NAS address once so the commands below can be pasted as-is:
 
 ```bash
-curl http://<nas-ip>:8765/healthz     # expect: ok
+NAS=172.16.25.50
 ```
 
-And confirm the endpoint actually rejects unauthenticated MCP traffic:
+### 3.1 Health check (unauthenticated by design)
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' -X POST http://<nas-ip>:8765/mcp
-# expect: 401
+curl -i http://$NAS:8765/healthz
 ```
+
+Expect `HTTP/1.1 200 OK` and a body of `ok`. This endpoint has no auth so
+the Docker healthcheck can use it.
+
+| What you see | Meaning |
+|--------------|---------|
+| `200` + `ok` | Transport is up |
+| `Connection refused` | Container not running, or the port isn't published |
+| Hangs, then nothing | Firewall between you and the NAS |
+
+If it's refused, check the container is actually running and did not
+crash-loop — in Container Station, look at the container's logs rather than
+just its status.
+
+### 3.2 Confirm authentication is enforced
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://$NAS:8765/mcp
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://$NAS:8765/mcp \
+  -H 'Authorization: Bearer not-a-real-token'
+```
+
+Both must print `401`. Anything else means the bearer check isn't running —
+stop and investigate before going further, because the MCP tools can restart
+devices and rewrite firewall rules.
+
+### 3.3 Admin UI reachable
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://$NAS:8766/login
+```
+
+Expect `200`.
+
+### 3.4 Mint a token, then prove a real MCP call works
+
+Follow section 4 to create a token, then:
+
+```bash
+TOKEN='<paste the token>'
+
+curl -sS -X POST http://$NAS:8765/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Accept: application/json, text/event-stream' \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}'
+```
+
+Expect an SSE frame containing `"serverInfo":{"name":"unifi-mcp"`.
+
+All three headers matter. The `Accept` header must list **both**
+`application/json` and `text/event-stream`; omit either and the MCP SDK
+rejects the request with `406 Not Acceptable`, which is easy to misread as
+an auth failure.
 
 ## 4. Mint a bearer token
 
@@ -141,21 +199,38 @@ the fields above are what a Streamable HTTP client needs.
 
 ## Fronting with a reverse proxy (TLS)
 
-The services speak plain HTTP, so put them behind a proxy that terminates
-TLS rather than exposing 8765/8766 directly. With nginx-proxy-manager,
-create one proxy host per service:
+The services speak plain HTTP, so terminate TLS in a proxy rather than
+exposing 8765/8766 directly. These steps use nginx-proxy-manager; the same
+directives apply to any nginx.
 
-| Proxy host | Forward to | Purpose |
-|------------|-----------|---------|
-| `unifi-mcp.<your-domain>` | `<nas-ip>` : `8765` | MCP endpoint |
-| `unifi-mcp-admin.<your-domain>` | `<nas-ip>` : `8766` | Token admin UI |
+Create **two** proxy hosts:
 
-Request a certificate for each, and enable **Force SSL**.
+| Proxy host | Forward to | Advanced config needed |
+|------------|-----------|------------------------|
+| `unifi-mcp.<domain>` | `<nas-ip>` : `8765` | Yes — see below |
+| `unifi-mcp-admin.<domain>` | `<nas-ip>` : `8766` | No |
 
-**Critical for the MCP host:** the Streamable HTTP transport streams
-responses as Server-Sent Events. nginx buffers proxied responses by default,
-which makes an MCP client hang waiting for data that is sitting in the
-proxy's buffer. In the proxy host's **Advanced** tab, add:
+### Proxy host settings — MCP endpoint (8765)
+
+**Details tab**
+
+| Field | Value |
+|-------|-------|
+| Domain Names | `unifi-mcp.<domain>` |
+| Scheme | `http` |
+| Forward Hostname / IP | your NAS IP |
+| Forward Port | `8765` |
+| Cache Assets | **off** |
+| Block Common Exploits | on |
+| Websockets Support | on |
+
+Leave **Cache Assets off**. Caching a streaming response is precisely the
+wrong behaviour and produces the same stall as buffering.
+
+**SSL tab** — request a new certificate, then enable **Force SSL** and
+**HTTP/2 Support**.
+
+**Advanced tab** — paste:
 
 ```nginx
 proxy_buffering off;
@@ -165,31 +240,66 @@ proxy_send_timeout 3600s;
 chunked_transfer_encoding on;
 ```
 
-Without `proxy_buffering off`, the endpoint appears to connect and then
-stall — the request never visibly fails, which makes it easy to misdiagnose
-as an auth or client problem.
+This is the step people miss. MCP Streamable HTTP returns Server-Sent
+Events, and nginx buffers proxied responses by default — so the client
+connects, then hangs with no error while the response sits in the proxy's
+buffer. It looks like an auth or client bug, and neither the container log
+nor the proxy log reports a failure.
 
-The admin UI needs no special settings; it is ordinary form-post HTML.
+The long timeouts matter separately: a streamed MCP session can stay open
+far longer than nginx's 60-second default, which would otherwise cut
+long-running tool calls off mid-flight.
 
-Once proxied, clients use the HTTPS URL:
+### Proxy host settings — admin UI (8766)
+
+Same Details and SSL settings with port `8766`. No Advanced config: the
+admin UI is ordinary form-post HTML with no streaming.
+
+### Re-verify through HTTPS
+
+Repeat the direct checks against the proxied hostnames — the proxy is a new
+component and inherits none of the guarantees you established in section 3.
+
+```bash
+MCPHOST=https://unifi-mcp.<domain>
+
+curl -i $MCPHOST/healthz
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $MCPHOST/mcp
+```
+
+Expect `200` + `ok`, then `401`.
+
+Then the streaming check, which is the one that actually exercises the
+buffering config:
+
+```bash
+time curl -sS -N -X POST $MCPHOST/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Accept: application/json, text/event-stream' \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}'
+```
+
+Expect `"serverInfo":{"name":"unifi-mcp"` returning in roughly the same time
+as the direct call in 3.4. A response that arrives only after a long delay,
+or not at all, means buffering is still on — recheck the Advanced tab and
+that Cache Assets is off.
+
+**Always use the `https://` URL in clients, never `http://`.** With Force
+SSL enabled, an `http://` request gets a 301 redirect, and an MCP client
+that doesn't follow redirects on POST will fail against it.
+
+Once proxied, point clients at the HTTPS URL:
 
 ```json
 {
   "mcpServers": {
     "unifi": {
-      "url": "https://unifi-mcp.<your-domain>/mcp",
+      "url": "https://unifi-mcp.<domain>/mcp",
       "headers": { "Authorization": "Bearer <token>" }
     }
   }
 }
-```
-
-Verify the proxied path end to end, not just the direct one:
-
-```bash
-curl https://unifi-mcp.<your-domain>/healthz     # expect: ok
-curl -s -o /dev/null -w '%{http_code}\n' -X POST \
-  https://unifi-mcp.<your-domain>/mcp            # expect: 401
 ```
 
 ## Security notes
