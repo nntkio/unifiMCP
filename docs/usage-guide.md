@@ -334,5 +334,7 @@ Bearer tokens for the HTTP endpoint are managed through a separate
 `unifi-mcp-admin` service (also started by `docker compose up -d`) — a root
 account (`ROOT_ADMIN_USERNAME`/`ROOT_ADMIN_PASSWORD`) logs in to create
 accounts for trusted people, who each log in themselves to create, view,
-and revoke their own tokens. See the "Token Admin Service" section in
+and revoke their own tokens. Root can also delete users and review a usage
+log of every call made through the endpoint (who, from which IP, which
+tool, when). See the "Token Admin Service" section in
 [`README.md`](../README.md) for the full walkthrough.

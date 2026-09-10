@@ -1,56 +1,100 @@
-<!doctype html>
-<html>
-<head><title>My Tokens — UnifiMCP Token Admin</title></head>
-<body>
-  <h1>My Tokens</h1>
-  <form method="post" action="/logout"><button type="submit">Log out</button></form>
+{% extends "base.html" %}
+{% block title %}My tokens{% endblock %}
+{% block page_tag %}Account{% endblock %}
+{% block page_title %}My tokens{% endblock %}
+{% block content %}
+{% if new_token %}
+<section class="adm-reveal" role="status">
+  <div class="adm-eyebrow adm-reveal-title">New token</div>
+  <div class="adm-reveal-row">
+    <code class="adm-reveal-token" id="new-token">{{ new_token }}</code>
+    <button type="button" class="adm-btn adm-btn-ghost" data-copy="#new-token" hidden>Copy</button>
+  </div>
+  <p class="adm-reveal-warn">Copy it now, it will not be shown again. Send it as <code>Authorization: Bearer …</code> to the MCP endpoint.</p>
+</section>
+{% endif %}
 
-  {% if error %}<p style="color: red;">{{ error }}</p>{% endif %}
-  {% if new_token %}
-    <p style="color: green;">
-      New token — copy it now, it will not be shown again:<br>
-      <code>{{ new_token }}</code>
-    </p>
-  {% endif %}
-
-  <h2>Create a token</h2>
-  <form method="post" action="/tokens">
+<section class="adm-card">
+  <div class="adm-card-head">
+    <div>
+      <h2 class="adm-card-title">Create a token</h2>
+      <p class="adm-card-sub">One token per client is easiest to revoke later. Label it after the machine or app that will use it.</p>
+    </div>
+  </div>
+  <form method="post" action="/tokens" class="adm-form-row">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>Label <input type="text" name="label" required></label><br>
-    <label>Expiry
-      <select name="expiry_preset">
+    <div class="adm-field">
+      <label class="adm-label" for="label">Label</label>
+      <input class="adm-input" id="label" type="text" name="label" placeholder="e.g. laptop, claude-desktop" required>
+    </div>
+    <div class="adm-field">
+      <label class="adm-label" for="expiry-preset">Expiry</label>
+      <select class="adm-select" id="expiry-preset" name="expiry_preset">
         <option value="30d">30 days</option>
         <option value="90d">90 days</option>
         <option value="365d">365 days</option>
         <option value="never">Never</option>
         <option value="custom">Custom date</option>
       </select>
-    </label>
-    <label>Custom date (if "Custom date" selected above)
-      <input type="date" name="custom_date">
-    </label><br>
-    <button type="submit">Create token</button>
+    </div>
+    <div class="adm-field" id="custom-date-field">
+      <label class="adm-label" for="custom-date">Custom date</label>
+      <input class="adm-input" id="custom-date" type="date" name="custom_date">
+      <span class="adm-hint">Used only when “Custom date” is selected.</span>
+    </div>
+    <div class="adm-form-submit">
+      <button type="submit" class="adm-btn adm-btn-primary">Create token</button>
+    </div>
   </form>
+</section>
 
-  <h2>Existing tokens</h2>
-  <table border="1">
-    <tr><th>Label</th><th>Created</th><th>Expires</th><th>Revoked</th><th></th></tr>
-    {% for token in tokens %}
-    <tr>
-      <td>{{ token.label }}</td>
-      <td>{{ token.created_at }}</td>
-      <td>{{ token.expires_at or "Never" }}</td>
-      <td>{{ token.revoked_at or "Active" }}</td>
-      <td>
-        {% if not token.revoked_at %}
-        <form method="post" action="/tokens/{{ token.id }}/revoke">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button type="submit">Revoke</button>
-        </form>
-        {% endif %}
-      </td>
-    </tr>
-    {% endfor %}
+<section class="adm-table-wrap">
+  <div class="adm-table-head">
+    <div>
+      <h2 class="adm-card-title">Existing tokens</h2>
+      <p class="adm-card-sub">Revoking stops a token immediately. Expired and revoked tokens stay listed for reference.</p>
+    </div>
+  </div>
+  {% if tokens %}
+  <div class="adm-table-scroll">
+  <table class="adm-table">
+    <thead>
+      <tr>
+        <th>Label</th>
+        <th>Created</th>
+        <th>Expires</th>
+        <th>Status</th>
+        <th class="adm-right">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for token in tokens %}
+      {% set status = token|token_status %}
+      <tr>
+        <td class="adm-cell-primary">{{ token.label }}</td>
+        <td class="adm-mono adm-faint adm-nowrap">{{ token.created_at|short_date }}</td>
+        <td class="adm-mono adm-faint adm-nowrap">{{ token.expires_at|short_date if token.expires_at else 'Never' }}</td>
+        <td><span class="adm-badge {{ status }}">{{ status|capitalize }}</span></td>
+        <td>
+          <div class="adm-actions">
+            {% if status == 'active' %}
+            <form class="adm-inline-form" method="post" action="/tokens/{{ token.id }}/revoke" data-confirm="Revoke the token “{{ token.label }}”?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="adm-btn adm-btn-ghost adm-btn-sm">Revoke</button>
+            </form>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
   </table>
-</body>
-</html>
+  </div>
+  {% else %}
+  <div class="adm-empty">
+    <div class="adm-empty-title">No tokens yet</div>
+    <div class="adm-empty-text">Create one above and paste it into your MCP client.</div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

@@ -176,8 +176,20 @@ an auth failure.
 4. Create a token with a label and an expiry. **It is displayed exactly
    once** — only its SHA-256 hash is stored, so copy it immediately.
 
-Root cannot create tokens for itself; it only provisions accounts and can
-revoke anyone's token from `/admin`.
+Root cannot create tokens for itself; it only provisions accounts. From
+`/admin` root sees every account with its tokens grouped underneath, can
+revoke any single token, or delete a user (which removes the account and
+all of its tokens).
+
+### 4.1 Watch who is calling
+
+`http://<nas-ip>:8766/admin/usage` (root only) lists every JSON-RPC message
+the MCP service accepted: time (UTC), user, token label, client IP,
+`X-Forwarded-For`, method, tool, HTTP status, and duration. Every column has
+a filter, so you can answer "which tools did `alice` call from
+`203.0.113.7` this week" in a couple of clicks. The log lives in the same
+`tokens.db` volume as the accounts, so nothing extra needs mounting or
+backing up.
 
 ## 5. Point an MCP client at it
 
@@ -275,6 +287,11 @@ nor the proxy log reports a failure.
 The long timeouts matter separately: a streamed MCP session can stay open
 far longer than nginx's 60-second default, which would otherwise cut
 long-running tool calls off mid-flight.
+
+Nginx Proxy Manager adds `X-Forwarded-For` on its own, which is what the
+admin's Usage screen (section 4.1) reads for the IP column. Without it every
+call would appear to come from the proxy's address, which is still recorded
+separately as the direct peer.
 
 ### Proxy host settings — admin UI (8766)
 

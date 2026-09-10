@@ -1,14 +1,26 @@
-<!doctype html>
-<html>
-<head><title>UnifiMCP Token Admin — Log in</title></head>
-<body>
-  <h1>Log in</h1>
-  {% if error %}<p style="color: red;">{{ error }}</p>{% endif %}
-  <form method="post" action="/login">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>Username <input type="text" name="username" required></label><br>
-    <label>Password <input type="password" name="password" required></label><br>
-    <button type="submit">Log in</button>
-  </form>
-</body>
-</html>
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block layout %}
+<div class="adm-login">
+  <div class="adm-login-card">
+    <div class="adm-brand">{% include "_logo.html" %}</div>
+    <div class="adm-eyebrow"><span class="adm-slash">/</span> Token admin</div>
+    <h1 class="adm-login-title">Sign in</h1>
+    <p class="adm-login-sub">Manage the bearer tokens that unlock the UniFi MCP endpoint.</p>
+    {% if error %}<div class="adm-alert error" role="alert">{{ error }}</div>{% endif %}
+    <form class="adm-login-form" method="post" action="/login">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="adm-field">
+        <label class="adm-label" for="username">Username</label>
+        <input class="adm-input" id="username" type="text" name="username" autocomplete="username" autofocus required>
+      </div>
+      <div class="adm-field">
+        <label class="adm-label" for="password">Password</label>
+        <input class="adm-input" id="password" type="password" name="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="adm-btn adm-btn-primary adm-btn-block">Sign in</button>
+    </form>
+    <div class="adm-login-foot">seeg development · UniFi MCP</div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{% endblock %} · UniFi MCP Token Admin</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+{% block layout %}
+<div class="adm-shell">
+  <aside class="adm-sidebar">
+    <a class="adm-brand" href="{{ '/admin' if current_user.role == 'root' else '/tokens' }}">{% include "_logo.html" %}</a>
+    <nav class="adm-nav" aria-label="Main">
+      {% if current_user.role == 'root' %}
+      <a class="adm-nav-item{{ ' active' if active_nav == 'accounts' }}" href="/admin">
+        <svg class="adm-icon" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span>Accounts</span>
+      </a>
+      <a class="adm-nav-item{{ ' active' if active_nav == 'usage' }}" href="/admin/usage">
+        <svg class="adm-icon" viewBox="0 0 24 24"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>
+        <span>Usage</span>
+      </a>
+      {% else %}
+      <a class="adm-nav-item{{ ' active' if active_nav == 'tokens' }}" href="/tokens">
+        <svg class="adm-icon" viewBox="0 0 24 24"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>
+        <span>My tokens</span>
+      </a>
+      {% endif %}
+    </nav>
+    <div class="adm-me">
+      <span class="adm-me-av" aria-hidden="true">{{ current_user.username[:2] }}</span>
+      <span class="adm-me-id"><span class="adm-me-name">{{ current_user.username }}</span><span class="adm-me-role">{{ 'Administrator' if current_user.role == 'root' else 'Account' }}</span></span>
+      <form class="adm-me-out" method="post" action="/logout">
+        <button type="submit" class="adm-btn adm-btn-ghost adm-btn-icon adm-btn-on-dark" title="Log out" aria-label="Log out">
+          <svg class="adm-icon" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+        </button>
+      </form>
+    </div>
+  </aside>
+  <main class="adm-main">
+    <header class="adm-topbar">
+      <div>
+        <div class="adm-eyebrow adm-page-tag"><span class="adm-slash">/</span> {% block page_tag %}{% endblock %}</div>
+        <h1 class="adm-page-title">{% block page_title %}{% endblock %}</h1>
+      </div>
+      <div class="adm-topbar-actions">{% block topbar_actions %}{% endblock %}</div>
+    </header>
+    <div class="adm-body">
+      {% if error %}<div class="adm-alert error" role="alert">{{ error }}</div>{% endif %}
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+</div>
+{% endblock %}
+<script src="/static/admin.js" defer></script>
+</body>
+</html>
