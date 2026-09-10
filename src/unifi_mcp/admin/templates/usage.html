@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Usage{% endblock %}
+{% block page_tag %}Administration{% endblock %}
+{% block page_title %}Usage{% endblock %}
+{% block topbar_actions %}
+{% if filters_active %}<a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/usage">Clear filters</a>{% endif %}
+{% endblock %}
+{% block content %}
+<div class="adm-stats">
+  <div class="adm-stat"><div class="adm-stat-val">{{ summary.calls_today }}</div><div class="adm-eyebrow adm-stat-lbl">Calls today</div></div>
+  <div class="adm-stat"><div class="adm-stat-val">{{ summary.calls_last_7_days }}</div><div class="adm-eyebrow adm-stat-lbl">Calls · last 7 days</div></div>
+  <div class="adm-stat"><div class="adm-stat-val">{{ summary.callers_last_7_days }}</div><div class="adm-eyebrow adm-stat-lbl">Accounts · last 7 days</div></div>
+  <div class="adm-stat"><div class="adm-stat-val">{{ summary.ips_last_7_days }}</div><div class="adm-eyebrow adm-stat-lbl">Client IPs · last 7 days</div></div>
+</div>
+
+<form id="usage-filters" method="get" action="/admin/usage"></form>
+
+<section class="adm-table-wrap">
+  <div class="adm-table-head">
+    <div>
+      <h2 class="adm-card-title">Every call to the MCP endpoint</h2>
+      <p class="adm-card-sub">One row per JSON-RPC message. Times are UTC. IP is the first forwarded hop when a proxy is in front, otherwise the direct peer.</p>
+    </div>
+  </div>
+  <div class="adm-table-scroll">
+  <table class="adm-table adm-table-dense">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>User</th>
+        <th>Token</th>
+        <th>IP</th>
+        <th>Forwarded for</th>
+        <th>Method</th>
+        <th>Tool</th>
+        <th>Status</th>
+        <th>Duration</th>
+      </tr>
+      <tr class="adm-filter-row">
+        <th>
+          <div class="adm-filter-stack">
+            <input class="adm-filter-input" form="usage-filters" type="datetime-local" name="since" value="{{ filters.since or '' }}" aria-label="From" title="From (UTC)">
+            <input class="adm-filter-input" form="usage-filters" type="datetime-local" name="until" value="{{ filters.until or '' }}" aria-label="Until" title="Until (UTC)">
+          </div>
+        </th>
+        <th>
+          <select class="adm-filter-select" form="usage-filters" name="owner_username" aria-label="User">
+            <option value="">All users</option>
+            {% for name in facets.owner_usernames %}<option value="{{ name }}"{{ ' selected' if filters.owner_username == name }}>{{ name }}</option>{% endfor %}
+          </select>
+        </th>
+        <th>
+          <select class="adm-filter-select" form="usage-filters" name="token_label" aria-label="Token">
+            <option value="">All tokens</option>
+            {% for label in facets.token_labels %}<option value="{{ label }}"{{ ' selected' if filters.token_label == label }}>{{ label }}</option>{% endfor %}
+          </select>
+        </th>
+        <th><input class="adm-filter-input" form="usage-filters" type="text" name="ip" value="{{ filters.ip or '' }}" placeholder="contains…" aria-label="IP"></th>
+        <th><input class="adm-filter-input" form="usage-filters" type="text" name="forwarded_for" value="{{ filters.forwarded_for or '' }}" placeholder="contains…" aria-label="Forwarded for"></th>
+        <th>
+          <select class="adm-filter-select" form="usage-filters" name="method" aria-label="Method">
+            <option value="">All methods</option>
+            {% for method in facets.methods %}<option value="{{ method }}"{{ ' selected' if filters.method == method }}>{{ method }}</option>{% endfor %}
+          </select>
+        </th>
+        <th>
+          <select class="adm-filter-select" form="usage-filters" name="tool" aria-label="Tool">
+            <option value="">All tools</option>
+            {% for tool in facets.tools %}<option value="{{ tool }}"{{ ' selected' if filters.tool == tool }}>{{ tool }}</option>{% endfor %}
+          </select>
+        </th>
+        <th>
+          <select class="adm-filter-select" form="usage-filters" name="status" aria-label="Status">
+            <option value="">Any</option>
+            {% for code in facets.statuses %}<option value="{{ code }}"{{ ' selected' if filters.status == code }}>{{ code }}</option>{% endfor %}
+          </select>
+        </th>
+        <th>
+          <div class="adm-filter-stack adm-filter-stack-narrow">
+            <input class="adm-filter-input" form="usage-filters" type="number" min="0" name="min_duration_ms" value="{{ filters.min_duration_ms if filters.min_duration_ms is not none else '' }}" placeholder="≥ ms" aria-label="Minimum duration">
+            <button type="submit" form="usage-filters" class="adm-btn adm-btn-primary adm-btn-sm">Apply</button>
+          </div>
+        </th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="adm-mono adm-nowrap">{{ row.ts|short_date(seconds=True) }}</td>
+        <td class="adm-cell-primary">{{ row.owner_username }}</td>
+        <td class="adm-nowrap">{{ row.token_label }}</td>
+        <td class="adm-mono adm-nowrap">{{ row.ip }}</td>
+        <td class="adm-mono adm-faint adm-cell-clip" title="{{ row.forwarded_for or '' }}">{{ row.forwarded_for or '' }}</td>
+        <td class="adm-mono">{{ row.method or '' }}</td>
+        <td class="adm-mono">{{ row.tool or '' }}</td>
+        <td><span class="adm-status {{ 'ok' if row.status < 400 else ('warn' if row.status < 500 else 'bad') }}">{{ row.status }}</span></td>
+        <td class="adm-mono adm-faint adm-nowrap">{{ row.duration_ms }} ms</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="9">
+        <div class="adm-empty">
+          <div class="adm-empty-title">{{ 'No calls match these filters' if filters_active else 'No calls recorded yet' }}</div>
+          <div class="adm-empty-text">{{ 'Loosen a filter or clear them all.' if filters_active else 'Rows appear as soon as a client sends a request with a valid bearer token.' }}</div>
+        </div>
+      </td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="adm-pager">
+    <span class="adm-pager-info">{{ total }} call{{ 's' if total != 1 }}{{ ' match the filters' if filters_active }} · page {{ page }} of {{ page_count }}</span>
+    <div class="adm-pager-btns">
+      {% if prev_url %}<a class="adm-btn adm-btn-ghost adm-btn-sm" href="{{ prev_url }}">Newer</a>{% else %}<span class="adm-btn adm-btn-ghost adm-btn-sm" aria-disabled="true">Newer</span>{% endif %}
+      {% if next_url %}<a class="adm-btn adm-btn-ghost adm-btn-sm" href="{{ next_url }}">Older</a>{% else %}<span class="adm-btn adm-btn-ghost adm-btn-sm" aria-disabled="true">Older</span>{% endif %}
+    </div>
+  </div>
+</section>
+{% endblock %}

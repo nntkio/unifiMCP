@@ -160,6 +160,96 @@ Add to your Claude Desktop config file (`~/.config/claude/claude_desktop_config.
 | `get_networks` | List network configurations |
 | `get_device_activity` | Get activity for a specific device (connected clients, traffic) |
 
+## Running as a Network Service (HTTP Transport)
+
+By default the server speaks MCP over stdio (a local subprocess). It can
+also run as a persistent Streamable HTTP service — e.g. for a Docker/QNAP
+deployment reachable over the LAN — by setting `MCP_TRANSPORT=http`.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MCP_TRANSPORT` | `stdio` or `http` | `stdio` |
+| `MCP_HTTP_HOST` | Bind host (HTTP mode only) | `0.0.0.0` |
+| `MCP_HTTP_PORT` | Bind port (HTTP mode only) | `8765` |
+| `TOKEN_DB_PATH` | Path to the shared SQLite token database (HTTP mode only) | `/data/tokens.db` |
+
+In HTTP mode, the server exposes:
+- `POST/GET /mcp` — the MCP Streamable HTTP endpoint, requires
+  `Authorization: Bearer <token>`
+- `GET /healthz` — unauthenticated health check, used by Docker's healthcheck
+
+Tokens aren't configured directly — they're created through the separate
+**token-admin service** (`unifi-mcp-admin`, included in `docker-compose.yml`).
+See its section below for how to log in and mint a token.
+
+An MCP client pointed at a remote Streamable HTTP server (instead of
+spawning a local subprocess) typically needs a URL and a bearer token,
+e.g.:
+
+```json
+{
+  "mcpServers": {
+    "unifi": {
+      "url": "http://<nas-host>:8765/mcp",
+      "headers": {
+        "Authorization": "Bearer <token from the token-admin service>"
+      }
+    }
+  }
+}
+```
+
+(Check your specific MCP client's documentation for its exact remote-server
+config format — the shape above is illustrative.)
+
+## Token Admin Service
+
+`unifi-mcp-admin` is a small web UI for creating and revoking the bearer
+tokens the HTTP transport above requires. It shares a SQLite database
+(`TOKEN_DB_PATH`) with the `unifi-mcp` service via a Docker volume.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ROOT_ADMIN_USERNAME` | Root admin login username | `root` |
+| `ROOT_ADMIN_PASSWORD` | Root admin login password (required) | - |
+| `ADMIN_SESSION_SECRET` | Signs session cookies (required) | - |
+| `ADMIN_HTTP_HOST` | Bind host | `0.0.0.0` |
+| `ADMIN_HTTP_PORT` | Bind port | `8766` |
+
+Root has no account of its own to hold a token — it exists only to
+provision and supervise. Signing in as root opens two screens:
+
+- **Accounts** (`/admin`) — create accounts, and see every account with the
+  tokens created under it (label, created, expires, status). Root can
+  **delete a user**, which removes the account and all of its tokens, or
+  **revoke** any single token.
+- **Usage** (`/admin/usage`) — a log of every call made to the MCP endpoint:
+  time, user, token, client IP, `X-Forwarded-For`, JSON-RPC method, tool
+  name, HTTP status, and duration. Each column has its own filter
+  (combined with AND) and the list pages 50 rows at a time.
+
+Each person then logs in at `http://<host>:8766/login` with the temporary
+password root gave them and lands on **My tokens** (`/tokens`) to create,
+view, and revoke their own tokens. A newly created token is shown exactly
+once — copy it immediately, since only its hash is stored.
+
+The usage log is written by the `unifi-mcp` service itself (one row per
+JSON-RPC message that passes bearer authentication) into the same SQLite
+database, so it needs no extra configuration. Behind a reverse proxy the IP
+column shows the first `X-Forwarded-For` hop and the direct peer is kept in
+the database as well.
+
+```bash
+docker compose up -d
+# then, in a browser:
+#   http://<host>:8766/login   (log in as root, create an account)
+#   http://<host>:8766/login   (log in as that account, create a token)
+#   http://<host>:8766/admin/usage   (as root: who called what, from where)
+```
+
+The interface is self-contained: fonts, stylesheet, and script are served
+from the service itself, so it works on a LAN with no internet access.
+
 ## Development
 
 ```bash

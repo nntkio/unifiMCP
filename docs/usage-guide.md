@@ -10,7 +10,9 @@ UnifiMCP is an MCP (Model Context Protocol) server that exposes UniFi network
 controller operations — listing devices/clients, blocking/restarting things,
 reading site health — as tools an AI assistant can call. It talks to your
 UniFi Controller (self-hosted or a UniFi OS console like a UDM/UDM Pro) over
-its local HTTP API and speaks MCP over stdio to the assistant.
+its local HTTP API and speaks MCP to the assistant, by default over stdio
+(a local subprocess) — it can also run as a persistent Streamable HTTP
+service; see [section 9](#9-running-as-a-network-service) below.
 
 ## Prerequisites
 
@@ -124,9 +126,11 @@ source .venv/bin/activate
 UNIFI_HOST=... UNIFI_USERNAME=... UNIFI_PASSWORD=... unifi-mcp
 ```
 
-The server speaks newline-delimited JSON-RPC 2.0 over stdin/stdout (the MCP
-stdio transport) — it will look like it's hanging, since it's waiting for a
-client to send it requests. That's expected; Ctrl-C to stop it.
+By default the server speaks newline-delimited JSON-RPC 2.0 over
+stdin/stdout (the MCP stdio transport) — it will look like it's hanging,
+since it's waiting for a client to send it requests. That's expected;
+Ctrl-C to stop it. For running it instead as a persistent network service,
+see [section 9](#9-running-as-a-network-service).
 
 ## 4. Connecting to Claude
 
@@ -318,3 +322,19 @@ See [`CLAUDE.md`](../CLAUDE.md) for the test/lint workflow (`pytest`,
 [`unifi-api.md`](./unifi-api.md) for the underlying UniFi Controller HTTP API
 reference (endpoints, auth, response format, WebSocket events) that the
 `unifi_client/` package wraps.
+
+## 9. Running as a network service
+
+Instead of stdio, the server can run as a persistent Streamable HTTP
+service — the setup used for the Docker Compose deployment in this repo.
+Set `MCP_TRANSPORT=http` (see `.env.example` for the full list of
+`MCP_HTTP_*`/`TOKEN_DB_PATH` variables this enables).
+
+Bearer tokens for the HTTP endpoint are managed through a separate
+`unifi-mcp-admin` service (also started by `docker compose up -d`) — a root
+account (`ROOT_ADMIN_USERNAME`/`ROOT_ADMIN_PASSWORD`) logs in to create
+accounts for trusted people, who each log in themselves to create, view,
+and revoke their own tokens. Root can also delete users and review a usage
+log of every call made through the endpoint (who, from which IP, which
+tool, when). See the "Token Admin Service" section in
+[`README.md`](../README.md) for the full walkthrough.

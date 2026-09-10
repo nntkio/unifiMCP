@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Accounts{% endblock %}
+{% block page_tag %}Administration{% endblock %}
+{% block page_title %}Accounts and tokens{% endblock %}
+{% block topbar_actions %}
+<a class="adm-btn adm-btn-ghost adm-btn-sm" href="#create-account">
+  <svg class="adm-icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+  New account
+</a>
+{% endblock %}
+{% block content %}
+<div class="adm-stats">
+  <div class="adm-stat"><div class="adm-stat-val">{{ stats.accounts }}</div><div class="adm-eyebrow adm-stat-lbl">Accounts</div></div>
+  <div class="adm-stat"><div class="adm-stat-val">{{ stats.active }}</div><div class="adm-eyebrow adm-stat-lbl">Active tokens</div></div>
+  <div class="adm-stat"><div class="adm-stat-val">{{ stats.expiring }}</div><div class="adm-eyebrow adm-stat-lbl">Expiring within 30 days</div></div>
+  <div class="adm-stat"><div class="adm-stat-val">{{ stats.revoked }}</div><div class="adm-eyebrow adm-stat-lbl">Revoked</div></div>
+</div>
+
+<section class="adm-card" id="create-account">
+  <div class="adm-card-head">
+    <div>
+      <h2 class="adm-card-title">Create an account</h2>
+      <p class="adm-card-sub">Hand the temporary password to the person; they sign in and mint their own tokens.</p>
+    </div>
+  </div>
+  <form method="post" action="/admin/accounts" class="adm-form-row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="adm-field">
+      <label class="adm-label" for="new-username">Username</label>
+      <input class="adm-input" id="new-username" type="text" name="username" autocomplete="off" required>
+    </div>
+    <div class="adm-field">
+      <label class="adm-label" for="temp-password">Temporary password</label>
+      <input class="adm-input" id="temp-password" type="text" name="temp_password" autocomplete="off" required>
+    </div>
+    <div class="adm-form-submit">
+      <button type="submit" class="adm-btn adm-btn-primary">Create account</button>
+    </div>
+  </form>
+</section>
+
+<section class="adm-table-wrap">
+  <div class="adm-table-head">
+    <div>
+      <h2 class="adm-card-title">Accounts and their tokens</h2>
+      <p class="adm-card-sub">Deleting an account removes every token it owns. Revoking a token stops it immediately.</p>
+    </div>
+  </div>
+  {% if accounts %}
+  <div class="adm-table-scroll">
+  <table class="adm-table">
+    <thead>
+      <tr>
+        <th>Account / token</th>
+        <th>Created</th>
+        <th>Expires</th>
+        <th>Status</th>
+        <th class="adm-right">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for account in accounts %}
+      <tr class="adm-group">
+        <td>
+          <div class="adm-group-cell">
+            <span class="adm-group-name">{{ account.username }}</span>
+            <span class="adm-group-meta">{{ account.token_count }} token{{ 's' if account.token_count != 1 }} · {{ account.active_token_count }} active</span>
+          </div>
+        </td>
+        <td class="adm-mono adm-faint adm-nowrap">{{ account.created_at|short_date }}</td>
+        <td></td>
+        <td></td>
+        <td>
+          <div class="adm-actions">
+            <form class="adm-inline-form" method="post" action="/admin/accounts/{{ account.id }}/delete" data-confirm="Delete {{ account.username }} and all of their tokens? This cannot be undone.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="adm-btn adm-btn-danger adm-btn-sm">Delete user</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% for token in tokens_by_owner.get(account.id, []) %}
+      {% set status = token|token_status %}
+      <tr class="adm-child">
+        <td class="adm-cell-primary">{{ token.label }}</td>
+        <td class="adm-mono adm-faint adm-nowrap">{{ token.created_at|short_date }}</td>
+        <td class="adm-mono adm-faint adm-nowrap">{{ token.expires_at|short_date if token.expires_at else 'Never' }}</td>
+        <td><span class="adm-badge {{ status }}">{{ status|capitalize }}</span></td>
+        <td>
+          <div class="adm-actions">
+            {% if status == 'active' %}
+            <form class="adm-inline-form" method="post" action="/admin/tokens/{{ token.id }}/revoke" data-confirm="Revoke the token “{{ token.label }}” owned by {{ account.username }}?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="adm-btn adm-btn-ghost adm-btn-sm">Revoke</button>
+            </form>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% else %}
+      <tr class="adm-child-empty"><td colspan="5">No tokens yet</td></tr>
+      {% endfor %}
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <div class="adm-empty">
+    <div class="adm-empty-title">No accounts yet</div>
+    <div class="adm-empty-text">Create the first account above. Each account mints its own bearer tokens.</div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}
