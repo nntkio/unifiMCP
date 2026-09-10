@@ -49,6 +49,7 @@
     </header>
     <div class="adm-body">
       {% if error %}<div class="adm-alert error" role="alert">{{ error }}</div>{% endif %}
+      {% if flash %}<div class="adm-alert success" role="status">{{ flash }}</div>{% endif %}
       {% block content %}{% endblock %}
     </div>
   </main>

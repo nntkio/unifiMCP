@@ -207,7 +207,7 @@ marimo/_lsp/
 __marimo__/
 .DS_Store
 
-# Claude Code local settings (personal permissions/config, not shared)
+# Local agent settings (personal permissions/config, not shared)
 .claude/settings.local.json
 deploy/qnap.env
 deploy/*.local.yml

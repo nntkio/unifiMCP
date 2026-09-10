@@ -16,6 +16,24 @@
   <div class="adm-stat"><div class="adm-stat-val">{{ stats.revoked }}</div><div class="adm-eyebrow adm-stat-lbl">Revoked</div></div>
 </div>
 
+<dialog class="adm-dialog" id="reset-password"{{ ' open' if reset_account }}>
+  <form class="adm-dialog-form" id="reset-password-form" method="post" action="{{ ('/admin/accounts/' ~ reset_account.id ~ '/password') if reset_account else '' }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="adm-eyebrow"><span class="adm-slash">/</span> Account</div>
+    <h2 class="adm-dialog-title">Reset password for <span id="reset-password-name">{{ reset_account.username if reset_account else '' }}</span></h2>
+    <p class="adm-dialog-sub">The old password stops working immediately. Existing tokens are not affected.</p>
+    {% if reset_error %}<div class="adm-alert error" role="alert">{{ reset_error }}</div>{% endif %}
+    <div class="adm-field">
+      <label class="adm-label" for="new-password">New temporary password</label>
+      <input class="adm-input" id="new-password" type="text" name="new_password" autocomplete="off" required{{ ' autofocus' if reset_account }}>
+    </div>
+    <div class="adm-dialog-actions">
+      <a class="adm-btn adm-btn-ghost" href="/admin" data-dialog-close>Cancel</a>
+      <button type="submit" class="adm-btn adm-btn-primary">Set password</button>
+    </div>
+  </form>
+</dialog>
+
 <section class="adm-card" id="create-account">
   <div class="adm-card-head">
     <div>
@@ -72,6 +90,7 @@
         <td></td>
         <td>
           <div class="adm-actions">
+            <a class="adm-btn adm-btn-ghost adm-btn-sm" href="/admin/accounts/{{ account.id }}/password" data-reset-password data-username="{{ account.username }}">Reset password</a>
             <form class="adm-inline-form" method="post" action="/admin/accounts/{{ account.id }}/delete" data-confirm="Delete {{ account.username }} and all of their tokens? This cannot be undone.">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button type="submit" class="adm-btn adm-btn-danger adm-btn-sm">Delete user</button>

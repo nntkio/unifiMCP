@@ -22,18 +22,28 @@ the NAS directly.
 
 ## 1. Publish the image
 
-Built and pushed from a workstation, not the NAS:
+Built and pushed from a workstation, not the NAS, with the script in
+`scripts/`:
 
 ```bash
-# One-time: authenticate to ghcr.io with a PAT that has write:packages
-gh auth token | docker login ghcr.io -u <github-username> --password-stdin
+# Multi-arch (linux/amd64 + linux/arm64) so one tag works on x86_64 and ARM
+# QNAP models. Pushes :latest, :<version from pyproject.toml>, :sha-<git sha>.
+scripts/publish-image.sh
 
-# Multi-arch so the same tag works on x86_64 and ARM QNAP models
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/nntkio/unifi-mcp:latest \
-  --push .
+# Add one more tag on top of those, e.g. a release candidate
+scripts/publish-image.sh rc1
+
+# Build for this machine only and load it into local docker, without pushing,
+# to run the container before publishing
+scripts/publish-image.sh --local
 ```
+
+It needs Docker with buildx, and the `gh` CLI logged in with a token that
+carries `write:packages` (`gh auth refresh -s write:packages` adds it). Set
+`GHCR_TOKEN` and `GHCR_USER` instead to use a dedicated PAT, or `IMAGE` and
+`PLATFORMS` to publish elsewhere. If your default buildx builder cannot do
+both platforms the script creates one called `unifi-mcp-multiarch` and uses
+it just for this build.
 
 If the resulting package is private, either make it public in the GitHub
 package settings, or run `docker login ghcr.io` on the NAS with a PAT that
@@ -178,8 +188,9 @@ an auth failure.
 
 Root cannot create tokens for itself; it only provisions accounts. From
 `/admin` root sees every account with its tokens grouped underneath, can
-revoke any single token, or delete a user (which removes the account and
-all of its tokens).
+revoke any single token, reset a user's password (a dialog asks for the new
+temporary password; the user's tokens keep working), or delete a user
+(which removes the account and all of its tokens).
 
 ### 4.1 Watch who is calling
 

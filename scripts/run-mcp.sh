@@ -17,4 +17,9 @@ if [[ -f "$ENV_FILE" ]]; then
   done < "$ENV_FILE"
 fi
 
+# This script exists to be launched by an MCP client as a subprocess, so it
+# always speaks stdio, whatever .env says (the same file serves docker
+# compose, where MCP_TRANSPORT=http is the right setting).
+export MCP_TRANSPORT=stdio
+
 exec "$REPO_ROOT/.venv/bin/unifi-mcp"

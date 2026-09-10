@@ -57,6 +57,39 @@
     sync();
   }
 
+  /* Reset-password dialog. Without JS the "Reset password" link loads the
+     page with the dialog rendered open; with JS it opens modally in place. */
+  var dialog = document.getElementById('reset-password');
+  if (dialog && typeof dialog.showModal === 'function') {
+    var resetForm = document.getElementById('reset-password-form');
+    var resetName = document.getElementById('reset-password-name');
+    var resetInput = document.getElementById('new-password');
+    document.querySelectorAll('a[data-reset-password]').forEach(function (link) {
+      link.addEventListener('click', function (event) {
+        event.preventDefault();
+        resetForm.action = link.getAttribute('href');
+        resetName.textContent = link.getAttribute('data-username');
+        resetInput.value = '';
+        dialog.showModal();
+        resetInput.focus();
+      });
+    });
+    dialog.querySelectorAll('[data-dialog-close]').forEach(function (el) {
+      el.addEventListener('click', function (event) {
+        event.preventDefault();
+        dialog.close();
+      });
+    });
+    dialog.addEventListener('click', function (event) {
+      if (event.target === dialog) dialog.close();  // backdrop click
+    });
+    if (dialog.hasAttribute('open')) {  // server-rendered open: upgrade to modal
+      dialog.removeAttribute('open');
+      dialog.showModal();
+      resetInput.focus();
+    }
+  }
+
   /* Usage filters: selects apply on change; text inputs still need Enter/Apply. */
   var filters = document.getElementById('usage-filters');
   if (filters) {

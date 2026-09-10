@@ -583,3 +583,118 @@ class TestLoginResetsSession:
 
         assert tokens.status_code == 303
         assert tokens.headers["location"] == "/login"
+
+
+class TestResetPassword:
+    def test_root_can_reset_a_password_and_the_user_can_sign_in_with_it(
+        self, app, store, root_env
+    ):
+        alice_id = store.create_account("alice", "hunter2")
+
+        with TestClient(app) as client:
+            _login_as(client, "root", "rootpass123")
+            csrf = _extract_csrf(client.get("/admin").text)
+            response = client.post(
+                f"/admin/accounts/{alice_id}/password",
+                data={"new_password": "newpass9", "csrf_token": csrf},
+                follow_redirects=False,
+            )
+            accounts_page = client.get("/admin")
+
+        assert response.status_code == 303
+        assert response.headers["location"] == "/admin"
+        assert "Password for alice updated" in accounts_page.text
+        assert store.verify_account_password("alice", "hunter2") is None
+
+        with TestClient(app) as alice:
+            _login_as(alice, "alice", "newpass9")
+            tokens_page = alice.get("/tokens")
+
+        assert 'class="adm-me-name">alice<' in tokens_page.text
+
+    def test_reset_link_opens_the_dialog_without_javascript(self, app, store, root_env):
+        alice_id = store.create_account("alice", "hunter2")
+
+        with TestClient(app) as client:
+            _login_as(client, "root", "rootpass123")
+            page = client.get(f"/admin/accounts/{alice_id}/password")
+
+        assert page.status_code == 200
+        assert 'id="reset-password" open>' in page.text
+        assert 'id="reset-password-name">alice<' in page.text
+        assert f'action="/admin/accounts/{alice_id}/password"' in page.text
+
+    def test_dialog_is_closed_on_the_plain_accounts_page(self, app, store, root_env):
+        store.create_account("alice", "hunter2")
+
+        with TestClient(app) as client:
+            _login_as(client, "root", "rootpass123")
+            page = client.get("/admin")
+
+        assert 'id="reset-password">' in page.text
+        assert 'id="reset-password" open>' not in page.text
+
+    def test_empty_password_reopens_dialog_with_error(self, app, store, root_env):
+        alice_id = store.create_account("alice", "hunter2")
+
+        with TestClient(app) as client:
+            _login_as(client, "root", "rootpass123")
+            csrf = _extract_csrf(client.get("/admin").text)
+            response = client.post(
+                f"/admin/accounts/{alice_id}/password",
+                data={"new_password": "   ", "csrf_token": csrf},
+            )
+
+        assert response.status_code == 400
+        assert 'id="reset-password" open>' in response.text
+        assert "Enter a password" in response.text
+        assert store.verify_account_password("alice", "hunter2") == alice_id
+
+    def test_unknown_account_returns_404(self, app, root_env):
+        with TestClient(app) as client:
+            _login_as(client, "root", "rootpass123")
+            csrf = _extract_csrf(client.get("/admin").text)
+            form = client.get("/admin/accounts/999999/password")
+            response = client.post(
+                "/admin/accounts/999999/password",
+                data={"new_password": "newpass9", "csrf_token": csrf},
+            )
+
+        assert form.status_code == 404
+        assert response.status_code == 404
+
+    def test_bad_csrf_is_rejected(self, app, store, root_env):
+        alice_id = store.create_account("alice", "hunter2")
+
+        with TestClient(app) as client:
+            _login_as(client, "root", "rootpass123")
+            client.get("/admin")
+            response = client.post(
+                f"/admin/accounts/{alice_id}/password",
+                data={"new_password": "newpass9", "csrf_token": "bogus"},
+            )
+
+        assert response.status_code == 403
+        assert store.verify_account_password("alice", "hunter2") == alice_id
+
+    def test_regular_user_is_redirected(self, app, store):
+        alice_id = store.create_account("alice", "hunter2")
+        bob_id = store.create_account("bob", "hunter3")
+
+        with TestClient(app) as client:
+            _login_as(client, "alice", "hunter2")
+            csrf = _extract_csrf(client.get("/tokens").text)
+            form = client.get(
+                f"/admin/accounts/{bob_id}/password", follow_redirects=False
+            )
+            response = client.post(
+                f"/admin/accounts/{bob_id}/password",
+                data={"new_password": "newpass9", "csrf_token": csrf},
+                follow_redirects=False,
+            )
+
+        assert form.status_code == 303
+        assert response.status_code == 303
+        assert response.headers["location"] == "/login"
+        assert store.verify_account_password("bob", "hunter3") == bob_id
+        assert alice_id is not None

@@ -90,6 +90,7 @@ def _context(request: Request, active_nav: str, **extra: object) -> dict:
     return {
         "csrf_token": _csrf_token(request),
         "error": None,
+        "flash": None,
         "current_user": _current_user(request),
         "active_nav": active_nav,
         **extra,
@@ -185,7 +186,13 @@ def _token_stats(accounts: list[AccountRecord], tokens: list[TokenRecord]) -> di
 
 
 def _render_admin(
-    request: Request, *, error: str | None = None, status_code: int = 200
+    request: Request,
+    *,
+    error: str | None = None,
+    flash: str | None = None,
+    reset_account: AccountRecord | None = None,
+    reset_error: str | None = None,
+    status_code: int = 200,
 ) -> Response:
     token_store: TokenStore = request.app.state.token_store
     accounts = token_store.list_accounts()
@@ -203,6 +210,9 @@ def _render_admin(
             tokens_by_owner=tokens_by_owner,
             stats=_token_stats(accounts, tokens),
             error=error,
+            flash=flash,
+            reset_account=reset_account,
+            reset_error=reset_error,
         ),
         status_code=status_code,
     )
@@ -212,7 +222,7 @@ async def admin_home(request: Request) -> Response:
     redirect = _require_root(request)
     if redirect is not None:
         return redirect
-    return _render_admin(request)
+    return _render_admin(request, flash=request.session.pop("flash", None))
 
 
 async def admin_create_account(request: Request) -> Response:
@@ -257,6 +267,47 @@ async def admin_delete_account(request: Request) -> Response:
         token_store.delete_account(account_id)
     except AccountNotFoundError:
         return Response("Not found.", status_code=404)
+    return RedirectResponse("/admin", status_code=303)
+
+
+async def admin_reset_password_form(request: Request) -> Response:
+    """No-JavaScript path: render the Accounts page with the dialog open."""
+    redirect = _require_root(request)
+    if redirect is not None:
+        return redirect
+
+    token_store: TokenStore = request.app.state.token_store
+    account = token_store.get_account(int(request.path_params["account_id"]))
+    if account is None:
+        return Response("Not found.", status_code=404)
+    return _render_admin(request, reset_account=account)
+
+
+async def admin_reset_password(request: Request) -> Response:
+    redirect = _require_root(request)
+    if redirect is not None:
+        return redirect
+
+    form = await request.form()
+    submitted_csrf = str(form.get("csrf_token", ""))
+    if not csrf_token_valid(request.session.get("csrf_token"), submitted_csrf):
+        return Response("Invalid form submission.", status_code=403)
+
+    token_store: TokenStore = request.app.state.token_store
+    account = token_store.get_account(int(request.path_params["account_id"]))
+    if account is None:
+        return Response("Not found.", status_code=404)
+
+    password = str(form.get("new_password", ""))
+    if not password.strip():
+        return _render_admin(
+            request,
+            reset_account=account,
+            reset_error="Enter a password.",
+            status_code=400,
+        )
+    token_store.set_account_password(account.id, password)
+    request.session["flash"] = f"Password for {account.username} updated."
     return RedirectResponse("/admin", status_code=303)
 
 
@@ -458,6 +509,16 @@ def build_app(token_store: TokenStore, session_secret: str) -> Starlette:
             Route(
                 "/admin/accounts/{account_id:int}/delete",
                 admin_delete_account,
+                methods=["POST"],
+            ),
+            Route(
+                "/admin/accounts/{account_id:int}/password",
+                admin_reset_password_form,
+                methods=["GET"],
+            ),
+            Route(
+                "/admin/accounts/{account_id:int}/password",
+                admin_reset_password,
                 methods=["POST"],
             ),
             Route(

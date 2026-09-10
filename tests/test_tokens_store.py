@@ -421,3 +421,41 @@ class TestUsageLog:
         store.log_usage(_entry(token))  # must not raise
 
         assert "usage_log" in caplog.text
+
+
+class TestGetAccount:
+    def test_returns_record_with_token_counts(self, store):
+        alice_id = store.create_account("alice", "hunter2")
+        store.create_token(alice_id, "laptop", None)
+
+        account = store.get_account(alice_id)
+
+        assert account is not None
+        assert account.username == "alice"
+        assert account.token_count == 1
+        assert account.active_token_count == 1
+
+    def test_unknown_id_returns_none(self, store):
+        assert store.get_account(999999) is None
+
+
+class TestSetAccountPassword:
+    def test_new_password_replaces_the_old_one(self, store):
+        alice_id = store.create_account("alice", "hunter2")
+
+        store.set_account_password(alice_id, "newpass9")
+
+        assert store.verify_account_password("alice", "hunter2") is None
+        assert store.verify_account_password("alice", "newpass9") == alice_id
+
+    def test_unknown_account_raises(self, store):
+        with pytest.raises(AccountNotFoundError):
+            store.set_account_password(999999, "whatever")
+
+    def test_tokens_survive_a_password_reset(self, store):
+        alice_id = store.create_account("alice", "hunter2")
+        raw_token = store.create_token(alice_id, "laptop", None)
+
+        store.set_account_password(alice_id, "newpass9")
+
+        assert store.validate(raw_token) is True

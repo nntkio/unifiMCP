@@ -71,6 +71,17 @@ _TOKEN_SELECT = (
     "JOIN accounts ON accounts.id = tokens.owner_id"
 )
 
+# Account rows with live token counts; callers append GROUP BY (and WHERE).
+# The first bound parameter is "now", used to decide which tokens are active.
+_ACCOUNT_SELECT = (
+    "SELECT accounts.id, accounts.username, accounts.created_at, "
+    "COUNT(tokens.id) AS token_count, "
+    "COALESCE(SUM(CASE WHEN tokens.id IS NOT NULL AND tokens.revoked_at IS NULL "
+    "AND (tokens.expires_at IS NULL OR tokens.expires_at > ?) "
+    "THEN 1 ELSE 0 END), 0) AS active_token_count "
+    "FROM accounts LEFT JOIN tokens ON tokens.owner_id = accounts.id"
+)
+
 _USAGE_COLUMNS = (
     "id, ts, token_id, token_label, owner_id, owner_username, ip, remote_addr, "
     "forwarded_for, user_agent, method, tool, status, duration_ms"
@@ -252,18 +263,32 @@ class TokenStore:
         return row["id"]
 
     def list_accounts(self) -> list[AccountRecord]:
-        query = (
-            "SELECT accounts.id, accounts.username, accounts.created_at, "
-            "COUNT(tokens.id) AS token_count, "
-            "COALESCE(SUM(CASE WHEN tokens.id IS NOT NULL AND tokens.revoked_at IS NULL "
-            "AND (tokens.expires_at IS NULL OR tokens.expires_at > ?) "
-            "THEN 1 ELSE 0 END), 0) AS active_token_count "
-            "FROM accounts LEFT JOIN tokens ON tokens.owner_id = accounts.id "
-            "GROUP BY accounts.id ORDER BY accounts.username"
-        )
         with closing(self._connect()) as conn:
-            rows = conn.execute(query, (_now(),)).fetchall()
+            rows = conn.execute(
+                _ACCOUNT_SELECT + " GROUP BY accounts.id ORDER BY accounts.username",
+                (_now(),),
+            ).fetchall()
         return [AccountRecord(**dict(row)) for row in rows]
+
+    def get_account(self, account_id: int) -> AccountRecord | None:
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                _ACCOUNT_SELECT + " WHERE accounts.id = ? GROUP BY accounts.id",
+                (_now(), account_id),
+            ).fetchone()
+        return AccountRecord(**dict(row)) if row is not None else None
+
+    def set_account_password(self, account_id: int, password: str) -> None:
+        """Replace an account's password. Its tokens are left untouched."""
+        password_hash = _hasher.hash(password)
+        with closing(self._connect()) as conn:
+            cursor = conn.execute(
+                "UPDATE accounts SET password_hash = ? WHERE id = ?",
+                (password_hash, account_id),
+            )
+            if cursor.rowcount == 0:
+                raise AccountNotFoundError(account_id)
+            conn.commit()
 
     def delete_account(self, account_id: int) -> None:
         """Delete an account and every token it owns, in one transaction."""
