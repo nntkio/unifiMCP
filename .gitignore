@@ -210,3 +210,4 @@ __marimo__/
 # Claude Code local settings (personal permissions/config, not shared)
 .claude/settings.local.json
 deploy/qnap.env
+deploy/*.local.yml
