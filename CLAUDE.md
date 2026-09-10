@@ -31,8 +31,16 @@ uv pip install -e ".[dev]"
 src/
   unifi_mcp/
     __init__.py         # Package initialization
+    tokens.py           # Shared SQLite store: accounts, bearer tokens, usage log
+    admin/               # Token-admin web service (Starlette + Jinja2)
+      __init__.py         # Console-script entry point (unifi-mcp-admin)
+      app.py              # Routes: login, accounts (+ delete user), tokens, usage log
+      auth.py             # Root-credential check + CSRF helpers
+      templates/          # base.html shell + login/admin/tokens/usage pages
+      static/             # admin.css, admin.js, favicon, self-hosted fonts
     server/              # MCP server, split by domain
       __init__.py         # Tool registry, dispatch (list_tools/call_tool), client lifecycle, main
+      _http.py             # Streamable HTTP transport: bearer auth + usage-log middleware
       _schema.py           # ToolSpec dataclass + shared property schema constants
       _formatting.py        # Formatting helpers shared across domains (bytes, uptime, client lines)
       _devices.py            # Device tool handlers/formatters + cmd/devmgr commands
@@ -53,6 +61,9 @@ src/
       _<domain>.py                # One file per additional domain (see below), same shape
     resources/           # MCP resources definitions
 tests/
+  test_tokens_store.py        # TokenStore: accounts, tokens, usage log
+  test_admin_app.py           # Token-admin routes and rendered pages
+  test_server_http.py         # HTTP transport: auth + usage-log middleware
   test_server_registry.py     # list_tools/call_tool dispatch + client lifecycle
   test_server_formatting.py   # Shared formatting helpers
   test_server_<domain>.py     # Server tests, split by the same domains as server/

@@ -216,18 +216,39 @@ tokens the HTTP transport above requires. It shares a SQLite database
 | `ADMIN_HTTP_HOST` | Bind host | `0.0.0.0` |
 | `ADMIN_HTTP_PORT` | Bind port | `8766` |
 
-Root has no account of its own to hold a token — it exists only to create
-accounts for trusted people at `http://<host>:8766/admin`. Each person then
-logs in at `http://<host>:8766/login` to create, view, and revoke their own
-tokens at `/tokens`. A newly created token is shown exactly once — copy it
-immediately, since only its hash is stored.
+Root has no account of its own to hold a token — it exists only to
+provision and supervise. Signing in as root opens two screens:
+
+- **Accounts** (`/admin`) — create accounts, and see every account with the
+  tokens created under it (label, created, expires, status). Root can
+  **delete a user**, which removes the account and all of its tokens, or
+  **revoke** any single token.
+- **Usage** (`/admin/usage`) — a log of every call made to the MCP endpoint:
+  time, user, token, client IP, `X-Forwarded-For`, JSON-RPC method, tool
+  name, HTTP status, and duration. Each column has its own filter
+  (combined with AND) and the list pages 50 rows at a time.
+
+Each person then logs in at `http://<host>:8766/login` with the temporary
+password root gave them and lands on **My tokens** (`/tokens`) to create,
+view, and revoke their own tokens. A newly created token is shown exactly
+once — copy it immediately, since only its hash is stored.
+
+The usage log is written by the `unifi-mcp` service itself (one row per
+JSON-RPC message that passes bearer authentication) into the same SQLite
+database, so it needs no extra configuration. Behind a reverse proxy the IP
+column shows the first `X-Forwarded-For` hop and the direct peer is kept in
+the database as well.
 
 ```bash
 docker compose up -d
 # then, in a browser:
 #   http://<host>:8766/login   (log in as root, create an account)
 #   http://<host>:8766/login   (log in as that account, create a token)
+#   http://<host>:8766/admin/usage   (as root: who called what, from where)
 ```
+
+The interface is self-contained: fonts, stylesheet, and script are served
+from the service itself, so it works on a LAN with no internet access.
 
 ## Development
 

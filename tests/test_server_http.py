@@ -9,7 +9,7 @@ from starlette.testclient import TestClient
 
 from unifi_mcp import server as server_module
 from unifi_mcp.server._http import build_app
-from unifi_mcp.tokens import TokenStore
+from unifi_mcp.tokens import TokenStore, UsageFilter
 
 
 @pytest.fixture
@@ -188,3 +188,172 @@ class TestMcpPathWithoutTrailingSlash:
 
         assert response.status_code == 200
         assert '"serverInfo"' in response.text
+
+
+_INITIALIZE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "test", "version": "1"},
+    },
+}
+_ACCEPT = "application/json, text/event-stream"
+
+
+def _mcp_headers(raw_token: str, **extra: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {raw_token}", "Accept": _ACCEPT, **extra}
+
+
+def _initialized_session(client: TestClient, raw_token: str) -> str:
+    """Run the initialize handshake and return the session id to reuse."""
+    response = client.post("/mcp", json=_INITIALIZE, headers=_mcp_headers(raw_token))
+    assert response.status_code == 200
+    session_id = response.headers["mcp-session-id"]
+    client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+        headers=_mcp_headers(raw_token, **{"Mcp-Session-Id": session_id}),
+    )
+    return session_id
+
+
+class TestUsageLogMiddleware:
+    def test_tools_call_is_logged_with_caller_and_origin(self, mcp_server, token_store):
+        store, owner_id = token_store
+        raw_token = store.create_token(owner_id, "laptop", None)
+        app = build_app(mcp_server, store, AsyncMock())
+
+        with TestClient(app) as client:
+            session_id = _initialized_session(client, raw_token)
+            response = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": "get_devices", "arguments": {}},
+                },
+                headers=_mcp_headers(
+                    raw_token,
+                    **{
+                        "Mcp-Session-Id": session_id,
+                        "X-Forwarded-For": "203.0.113.7, 172.16.0.2",
+                        "User-Agent": "claude-code/1.0",
+                    },
+                ),
+            )
+
+        rows = store.list_usage(UsageFilter(tool="get_devices"), limit=10, offset=0)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.owner_username == "alice"
+        assert row.owner_id == owner_id
+        assert row.token_label == "laptop"
+        assert row.token_id == store.list_tokens(owner_id)[0].id
+        assert row.method == "tools/call"
+        assert row.ip == "203.0.113.7"
+        assert row.remote_addr == "testclient"
+        assert row.forwarded_for == "203.0.113.7, 172.16.0.2"
+        assert row.user_agent == "claude-code/1.0"
+        assert row.status == response.status_code
+        assert row.duration_ms >= 0
+
+    def test_every_message_in_the_handshake_is_logged(self, mcp_server, token_store):
+        store, owner_id = token_store
+        raw_token = store.create_token(owner_id, "laptop", None)
+        app = build_app(mcp_server, store, AsyncMock())
+
+        with TestClient(app) as client:
+            _initialized_session(client, raw_token)
+
+        methods = [
+            r.method for r in store.list_usage(UsageFilter(), limit=10, offset=0)
+        ]
+        assert methods == ["notifications/initialized", "initialize"]
+
+    def test_ip_falls_back_to_x_real_ip_then_peer(self, mcp_server, token_store):
+        store, owner_id = token_store
+        raw_token = store.create_token(owner_id, "laptop", None)
+        app = build_app(mcp_server, store, AsyncMock())
+
+        with TestClient(app) as client:
+            client.post(
+                "/mcp",
+                json=_INITIALIZE,
+                headers=_mcp_headers(raw_token, **{"X-Real-IP": "198.51.100.4"}),
+            )
+            client.post("/mcp", json=_INITIALIZE, headers=_mcp_headers(raw_token))
+
+        newest, oldest = store.list_usage(UsageFilter(), limit=10, offset=0)
+        assert oldest.ip == "198.51.100.4"
+        assert oldest.forwarded_for is None
+        assert newest.ip == "testclient"
+
+    def test_batch_body_logs_one_row_per_message(self, mcp_server, token_store):
+        store, owner_id = token_store
+        raw_token = store.create_token(owner_id, "laptop", None)
+        app = build_app(mcp_server, store, AsyncMock())
+
+        with TestClient(app) as client:
+            client.post(
+                "/mcp",
+                json=[
+                    {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {"name": "get_sites"},
+                    },
+                ],
+                headers=_mcp_headers(raw_token),
+            )
+
+        rows = store.list_usage(UsageFilter(), limit=10, offset=0)
+        assert sorted((r.method, r.tool) for r in rows) == [
+            ("ping", None),
+            ("tools/call", "get_sites"),
+        ]
+
+    def test_unparseable_body_is_logged_without_method(self, mcp_server, token_store):
+        store, owner_id = token_store
+        raw_token = store.create_token(owner_id, "laptop", None)
+        app = build_app(mcp_server, store, AsyncMock())
+
+        with TestClient(app) as client:
+            client.post(
+                "/mcp",
+                content=b"not json",
+                headers=_mcp_headers(raw_token, **{"Content-Type": "application/json"}),
+            )
+
+        (row,) = store.list_usage(UsageFilter(), limit=10, offset=0)
+        assert row.method is None
+        assert row.tool is None
+        assert row.status >= 400
+
+    def test_unauthorized_requests_are_not_logged(self, mcp_server, token_store):
+        store, _ = token_store
+        app = build_app(mcp_server, store, AsyncMock())
+
+        with TestClient(app) as client:
+            client.post("/mcp", json=_INITIALIZE)
+            client.post(
+                "/mcp", json=_INITIALIZE, headers=_mcp_headers("not-a-real-token")
+            )
+
+        assert store.count_usage(UsageFilter()) == 0
+
+    def test_non_post_requests_are_not_logged(self, mcp_server, token_store):
+        store, owner_id = token_store
+        raw_token = store.create_token(owner_id, "laptop", None)
+        app = build_app(mcp_server, store, AsyncMock())
+
+        with TestClient(app) as client:
+            client.get("/healthz")
+            client.delete("/mcp", headers=_mcp_headers(raw_token))
+
+        assert store.count_usage(UsageFilter()) == 0
