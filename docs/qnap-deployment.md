@@ -356,6 +356,154 @@ Once proxied, point clients at the HTTPS URL:
 }
 ```
 
+## Publishing the MCP endpoint with a Cloudflare Tunnel
+
+The reverse proxy above serves the LAN. Claude custom connectors need more
+than that: the connection is made from Anthropic's servers, so the endpoint
+must be reachable over public HTTPS. A Cloudflare Tunnel does that without
+opening a single inbound port — `cloudflared` dials out to Cloudflare and
+traffic comes back down that connection.
+
+Only the MCP service is published. The admin UI on 8766 stays on the LAN.
+
+### 1. Create the tunnel
+
+In the Cloudflare Zero Trust dashboard, go to **Networks → Tunnels → Create
+a tunnel**, choose **Cloudflared**, name it `unifi-mcp`, and copy the
+connector token it shows.
+
+### 2. Run the connector next to the MCP service
+
+Put the token in `qnap.env`:
+
+```bash
+CLOUDFLARE_TUNNEL_TOKEN=<the token you just copied>
+MCP_PUBLIC_URL=https://unifi-mcp.seeg.io
+```
+
+`deploy/docker-compose.qnap.yml` already carries the `cloudflared` service.
+Bring it up:
+
+```bash
+docker compose -f docker-compose.qnap.yml --env-file qnap.env up -d
+```
+
+`MCP_PUBLIC_URL` is what turns on the OAuth endpoints. It must be the bare
+origin — scheme and host, no path — and must match the URL entered in Claude
+minus `/mcp`. An invalid value stops the service at startup with a message
+saying so, rather than serving broken metadata.
+
+### 3. Publish the hostname
+
+In the tunnel's **Routes** tab, select **Add route → Published application**:
+
+| Field | Value |
+|-------|-------|
+| Subdomain | `unifi-mcp` |
+| Domain | `seeg.io` |
+| Path | leave empty |
+| Service type | `HTTP` |
+| URL | `unifi-mcp:8765` |
+
+The URL is the compose service name: `cloudflared` shares the default
+network with the MCP container, so it reaches it directly and the NAS never
+exposes the port publicly.
+
+Cloudflare creates a proxied CNAME for the hostname. **Delete any existing
+record for that name in the zone first** — the tunnel will not overwrite
+one. If your LAN resolver has its own override pointing the same name at
+nginx-proxy-manager, leave it: LAN clients keep the direct route, and both
+paths present the same hostname, so the OAuth metadata is identical either
+way.
+
+### 4. Verify from outside the LAN
+
+Run these from a network that is not your LAN, such as a phone on cellular:
+
+```bash
+curl -si https://unifi-mcp.seeg.io/healthz                     # 200, body "ok"
+curl -si -X POST https://unifi-mcp.seeg.io/mcp | head -20      # 401 + WWW-Authenticate
+curl -s https://unifi-mcp.seeg.io/.well-known/oauth-protected-resource/mcp
+curl -s https://unifi-mcp.seeg.io/.well-known/oauth-authorization-server
+curl -si https://unifi-mcp-admin.seeg.io/login                 # must NOT be reachable
+```
+
+The 401 must carry a `WWW-Authenticate: Bearer resource_metadata="..."`
+header — that pointer is how Claude discovers the authorization server. The
+protected-resource document's `resource` field must equal
+`https://unifi-mcp.seeg.io/mcp` exactly, character for character, including
+the path. If it does not match the URL typed into Claude, the connector
+fails to attach with no useful error.
+
+### Restricting who can reach it
+
+Two mechanisms are worth keeping apart, because **bypass** means something
+specific in Cloudflare.
+
+**Cloudflare Access with a Bypass policy** puts an identity check in front
+of the hostname. Anthropic's servers cannot complete an interactive login,
+so they need a **Bypass** policy — Access's term for letting traffic through
+without enforcement. Go to **Zero Trust → Access controls → Applications →
+Create new application → Self-hosted and private → Add public hostname**,
+select the `unifi-mcp` hostname, and attach two policies:
+
+| Order | Action | Selector | Value |
+|-------|--------|----------|-------|
+| 1 | Bypass | IP ranges | Anthropic's egress range, `160.79.104.0/21` |
+| 2 | Allow | Emails | your own address |
+
+Access evaluates Service Auth first, then Bypass, then Block and Allow, so
+the Bypass is what keeps `/mcp`, `/token`, `/register`, and the metadata
+documents reachable. The Allow policy matters just as much: the sign-in page
+is opened by **your browser**, which is not in Anthropic's range, so without
+it you could never complete a connector sign-in. Note Cloudflare's own
+caveat that a Bypass policy "does not enforce any Access security controls
+and requests are not logged" — the OAuth layer is still doing the real
+authentication underneath, so this is defence in depth rather than the
+primary control.
+
+**A WAF custom rule** is the lighter alternative if you would rather not put
+Access in the path at all. Under **Security → WAF → Custom rules**, create a
+rule with action **Block**:
+
+```
+(http.host eq "unifi-mcp.seeg.io"
+  and not ip.src in {160.79.104.0/21}
+  and not http.request.uri.path in {"/authorize" "/oauth/login"})
+```
+
+The two path exceptions exist for the same reason as the Allow policy above.
+
+Check Anthropic's published egress range before relying on either form; if
+it changes, this is what breaks. Skipping both is defensible, since every
+path still requires a valid token or a valid login.
+
+**One Cloudflare setting can break the connector outright: Bot Fight Mode.**
+It challenges clients it thinks are automated, and server-to-server requests
+from Anthropic look exactly like that. Cloudflare's documentation is explicit
+that "you cannot bypass or skip Bot Fight Mode using WAF custom rules or Page
+Rules", and that it runs "in a separate evaluation pipeline where *Skip*,
+*Bypass*, and *Allow* actions have no effect". If it is enabled on the zone,
+turn it off or move to Super Bot Fight Mode, which does support exceptions.
+The symptom is a connector that never completes its first request, with
+nothing useful in any log.
+
+### What the OAuth endpoints add
+
+With `MCP_PUBLIC_URL` set, the MCP service serves these alongside `/mcp`:
+
+| Path | Purpose |
+|------|---------|
+| `/.well-known/oauth-protected-resource[/mcp]` | Tells a client which authorization server protects this endpoint |
+| `/.well-known/oauth-authorization-server` | Endpoint discovery, advertising S256 PKCE |
+| `/register` | Dynamic client registration (RFC 7591) |
+| `/authorize` | Starts a sign-in; redirects the browser to `/oauth/login` |
+| `/oauth/login` | The sign-in and consent page, served by this service |
+| `/token` | Authorization-code and refresh-token exchange |
+| `/revoke` | Token revocation (RFC 7009) |
+
+None of them require a bearer token, by design. `/mcp` still does.
+
 ## Security notes
 
 - **The services themselves speak plain HTTP.** TLS is an explicit non-goal
