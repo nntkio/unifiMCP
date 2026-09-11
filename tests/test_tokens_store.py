@@ -9,6 +9,7 @@ import pytest
 from unifi_mcp.tokens import (
     AccountExistsError,
     AccountNotFoundError,
+    AuthorizationNotFoundError,
     TokenNotOwnedError,
     TokenStore,
     UsageEntry,
@@ -530,3 +531,178 @@ class TestTokenRotation:
 
         with pytest.raises(TokenNotOwnedError):
             store.rotate_token(token_id, None)
+
+
+def _make_authorization(store, client_id="client-1", minutes=10):
+    store.save_oauth_client(client_id, "{}")
+    return store.create_authorization(
+        client_id=client_id,
+        redirect_uri="https://claude.ai/api/mcp/auth_callback",
+        redirect_uri_explicit=True,
+        code_challenge="challenge",
+        state="state-123",
+        scope="",
+        resource="https://example.test/mcp",
+        expires_at=(datetime.now(UTC) + timedelta(minutes=minutes)).isoformat(),
+    )
+
+
+class TestAuthorizations:
+    def test_create_returns_opaque_id(self, store):
+        txn_id = _make_authorization(store)
+
+        assert isinstance(txn_id, str)
+        assert len(txn_id) >= 32
+
+    def test_get_returns_record_with_fields(self, store):
+        txn_id = _make_authorization(store)
+
+        record = store.get_authorization(txn_id)
+
+        assert record.client_id == "client-1"
+        assert record.redirect_uri == "https://claude.ai/api/mcp/auth_callback"
+        assert record.redirect_uri_explicit is True
+        assert record.state == "state-123"
+        assert record.owner_id is None
+        assert record.attempts == 0
+
+    def test_get_unknown_returns_none(self, store):
+        assert store.get_authorization("nope") is None
+
+    def test_get_expired_returns_none(self, store):
+        txn_id = _make_authorization(store, minutes=-1)
+
+        assert store.get_authorization(txn_id) is None
+
+    def test_complete_then_consume_round_trips(self, store):
+        owner_id = store.create_account("alice", "hunter2")
+        txn_id = _make_authorization(store)
+
+        code = store.complete_authorization(txn_id, owner_id)
+        record = store.consume_authorization_code(code)
+
+        assert record.owner_id == owner_id
+        assert record.code_challenge == "challenge"
+
+    def test_consume_is_single_use(self, store):
+        owner_id = store.create_account("alice", "hunter2")
+        txn_id = _make_authorization(store)
+        code = store.complete_authorization(txn_id, owner_id)
+
+        store.consume_authorization_code(code)
+
+        assert store.consume_authorization_code(code) is None
+
+    def test_consume_unknown_code_returns_none(self, store):
+        assert store.consume_authorization_code("nope") is None
+
+    def test_complete_unknown_txn_raises(self, store):
+        owner_id = store.create_account("alice", "hunter2")
+
+        with pytest.raises(AuthorizationNotFoundError):
+            store.complete_authorization("nope", owner_id)
+
+    def test_fail_attempt_returns_remaining(self, store):
+        txn_id = _make_authorization(store)
+
+        assert store.fail_authorization_attempt(txn_id, 5) == 4
+        assert store.fail_authorization_attempt(txn_id, 5) == 3
+
+    def test_fail_attempt_deletes_row_at_cap(self, store):
+        txn_id = _make_authorization(store)
+        for _ in range(4):
+            store.fail_authorization_attempt(txn_id, 5)
+
+        assert store.fail_authorization_attempt(txn_id, 5) == 0
+        assert store.get_authorization(txn_id) is None
+
+    def test_fail_attempt_on_unknown_txn_returns_zero(self, store):
+        assert store.fail_authorization_attempt("nope", 5) == 0
+
+    def test_delete_authorization_removes_row(self, store):
+        txn_id = _make_authorization(store)
+
+        store.delete_authorization(txn_id)
+
+        assert store.get_authorization(txn_id) is None
+
+
+def _make_oauth_token(store, username="alice", client_id="client-1"):
+    """Return (owner_id, token_id, access_token, refresh_token)."""
+    owner_id = store.create_account(username, "hunter2")
+    store.save_oauth_client(client_id, "{}")
+    access = store.create_token(owner_id, "OAuth · Claude", None)
+    token_id = store.resolve(access).id
+    refresh = store.create_refresh_token(
+        token_id=token_id,
+        client_id=client_id,
+        scope="",
+        grant_expires_at=(datetime.now(UTC) + timedelta(days=30)).isoformat(),
+    )
+    return owner_id, token_id, access, refresh
+
+
+class TestRefreshTokens:
+    def test_get_refresh_token_returns_record(self, store):
+        owner_id, token_id, _, refresh = _make_oauth_token(store)
+
+        record = store.get_refresh_token(refresh)
+
+        assert record.token_id == token_id
+        assert record.client_id == "client-1"
+        assert record.owner_id == owner_id
+        assert record.revoked_at is None
+
+    def test_get_refresh_token_unknown_returns_none(self, store):
+        assert store.get_refresh_token("nope") is None
+
+    def test_delete_refresh_token_removes_it(self, store):
+        _, _, _, refresh = _make_oauth_token(store)
+
+        store.delete_refresh_token(refresh)
+
+        assert store.get_refresh_token(refresh) is None
+
+    def test_refresh_record_reports_revoked_access_token(self, store):
+        owner_id, token_id, _, refresh = _make_oauth_token(store)
+        store.revoke_token(token_id, requesting_owner_id=owner_id)
+
+        assert store.get_refresh_token(refresh).revoked_at is not None
+
+    def test_get_oauth_client_id_for_token(self, store):
+        _, token_id, _, _ = _make_oauth_token(store)
+
+        assert store.get_oauth_client_id_for_token(token_id) == "client-1"
+
+    def test_get_oauth_client_id_for_static_token_is_none(self, store):
+        owner_id = store.create_account("bob", "hunter2")
+        store.create_token(owner_id, "laptop", None)
+        token_id = store.list_tokens(owner_id)[0].id
+
+        assert store.get_oauth_client_id_for_token(token_id) is None
+
+    def test_revoke_token_by_value_revokes_and_drops_refresh(self, store):
+        _, _, access, refresh = _make_oauth_token(store)
+
+        store.revoke_token_by_value(access)
+
+        assert store.resolve(access) is None
+        assert store.get_refresh_token(refresh) is None
+
+    def test_revoke_token_by_value_unknown_is_a_no_op(self, store):
+        store.revoke_token_by_value("nope")
+
+    def test_revoke_by_refresh_token_revokes_access_token(self, store):
+        _, _, access, refresh = _make_oauth_token(store)
+
+        store.revoke_by_refresh_token(refresh)
+
+        assert store.resolve(access) is None
+        assert store.get_refresh_token(refresh) is None
+
+    def test_deleting_account_cascades_to_refresh_tokens(self, store):
+        owner_id, _, _, refresh = _make_oauth_token(store)
+
+        store.delete_account(owner_id)
+
+        assert store.get_refresh_token(refresh) is None

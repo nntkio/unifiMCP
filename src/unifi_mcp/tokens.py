@@ -121,6 +121,12 @@ _ACCOUNT_SELECT = (
     "FROM accounts LEFT JOIN tokens ON tokens.owner_id = accounts.id"
 )
 
+# code_hash is deliberately excluded: it never leaves the store.
+_AUTHORIZATION_COLUMNS = (
+    "id, client_id, redirect_uri, redirect_uri_explicit, code_challenge, state, "
+    "scope, resource, created_at, expires_at, attempts, owner_id"
+)
+
 _USAGE_COLUMNS = (
     "id, ts, token_id, token_label, owner_id, owner_username, ip, remote_addr, "
     "forwarded_for, user_agent, method, tool, status, duration_ms"
@@ -144,6 +150,24 @@ class TokenRecord:
     created_at: str
     expires_at: str | None
     revoked_at: str | None
+
+
+@dataclass
+class AuthorizationRecord:
+    """One pending OAuth authorisation, between /authorize and the code exchange."""
+
+    id: str
+    client_id: str
+    redirect_uri: str
+    redirect_uri_explicit: bool
+    code_challenge: str
+    state: str | None
+    scope: str
+    resource: str | None
+    created_at: str
+    expires_at: str
+    attempts: int
+    owner_id: int | None
 
 
 @dataclass
@@ -241,6 +265,12 @@ class UsageSummary:
     calls_last_7_days: int
     callers_last_7_days: int
     ips_last_7_days: int
+
+
+def _authorization_from_row(row: sqlite3.Row) -> AuthorizationRecord:
+    data = dict(row)
+    data["redirect_uri_explicit"] = bool(data["redirect_uri_explicit"])
+    return AuthorizationRecord(**data)
 
 
 class AccountExistsError(Exception):
@@ -452,6 +482,113 @@ class TokenStore:
                 (client_id,),
             ).fetchone()
         return row["client_json"] if row else None
+
+    # ── OAuth authorisations ────────────────────────────────────
+
+    def create_authorization(
+        self,
+        *,
+        client_id: str,
+        redirect_uri: str,
+        redirect_uri_explicit: bool,
+        code_challenge: str,
+        state: str | None,
+        scope: str,
+        resource: str | None,
+        expires_at: str,
+    ) -> str:
+        """Start an authorisation and return its unguessable transaction id."""
+        txn_id = secrets.token_urlsafe(32)
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT INTO oauth_authorizations (id, client_id, redirect_uri, "
+                "redirect_uri_explicit, code_challenge, state, scope, resource, "
+                "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    txn_id,
+                    client_id,
+                    redirect_uri,
+                    int(redirect_uri_explicit),
+                    code_challenge,
+                    state,
+                    scope,
+                    resource,
+                    _now(),
+                    expires_at,
+                ),
+            )
+            conn.commit()
+        return txn_id
+
+    def get_authorization(self, txn_id: str) -> AuthorizationRecord | None:
+        """Return a live authorisation. Expired rows are swept and read as None."""
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "DELETE FROM oauth_authorizations WHERE expires_at <= ?", (_now(),)
+            )
+            conn.commit()
+            row = conn.execute(
+                f"SELECT {_AUTHORIZATION_COLUMNS} FROM oauth_authorizations "
+                "WHERE id = ?",
+                (txn_id,),
+            ).fetchone()
+        return _authorization_from_row(row) if row else None
+
+    def fail_authorization_attempt(self, txn_id: str, max_attempts: int) -> int:
+        """Count a failed sign-in. Returns attempts left; 0 deletes the row."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT attempts FROM oauth_authorizations WHERE id = ?", (txn_id,)
+            ).fetchone()
+            if row is None:
+                return 0
+            attempts = row["attempts"] + 1
+            if attempts >= max_attempts:
+                conn.execute("DELETE FROM oauth_authorizations WHERE id = ?", (txn_id,))
+                conn.commit()
+                return 0
+            conn.execute(
+                "UPDATE oauth_authorizations SET attempts = ? WHERE id = ?",
+                (attempts, txn_id),
+            )
+            conn.commit()
+            return max_attempts - attempts
+
+    def complete_authorization(self, txn_id: str, owner_id: int) -> str:
+        """Bind a signed-in account to the authorisation and return its code."""
+        raw_code = secrets.token_urlsafe(32)
+        with closing(self._connect()) as conn:
+            cursor = conn.execute(
+                "UPDATE oauth_authorizations SET owner_id = ?, code_hash = ? "
+                "WHERE id = ?",
+                (owner_id, _hash_token(raw_code), txn_id),
+            )
+            conn.commit()
+        if cursor.rowcount == 0:
+            raise AuthorizationNotFoundError(txn_id)
+        return raw_code
+
+    def consume_authorization_code(self, raw_code: str) -> AuthorizationRecord | None:
+        """Return the authorisation for a code and delete it — codes are single use."""
+        code_hash = _hash_token(raw_code)
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                f"SELECT {_AUTHORIZATION_COLUMNS} FROM oauth_authorizations "
+                "WHERE code_hash = ?",
+                (code_hash,),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "DELETE FROM oauth_authorizations WHERE code_hash = ?", (code_hash,)
+            )
+            conn.commit()
+        return _authorization_from_row(row)
+
+    def delete_authorization(self, txn_id: str) -> None:
+        with closing(self._connect()) as conn:
+            conn.execute("DELETE FROM oauth_authorizations WHERE id = ?", (txn_id,))
+            conn.commit()
 
     # ── usage log ─────────────────────────────────────────────────────────
 
