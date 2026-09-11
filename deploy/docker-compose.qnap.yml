@@ -45,5 +45,17 @@ services:
       - unifi-mcp-data:/data
     restart: unless-stopped
 
+  # Publishes the MCP service on a public hostname without opening a port on
+  # the NAS. Only needed for Claude custom connectors; delete this service
+  # for a LAN-only deployment. Reaches unifi-mcp over the compose network, so
+  # the tunnel's public hostname points at http://unifi-mcp:8765.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: unifi-mcp-tunnel
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - unifi-mcp
+    restart: unless-stopped
+
 volumes:
   unifi-mcp-data:
