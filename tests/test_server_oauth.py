@@ -4,15 +4,18 @@ import base64
 import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from mcp.server import Server
 from mcp.server.auth.provider import AuthorizationParams
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
+from unifi_mcp.server._http import build_app, normalize_public_url
 from unifi_mcp.server._oauth import (
     TokenStoreOAuthProvider,
     build_login_routes,
@@ -21,6 +24,7 @@ from unifi_mcp.server._oauth import (
 from unifi_mcp.tokens import TokenStore
 
 REDIRECT_URI = "https://claude.ai/api/mcp/auth_callback"
+PUBLIC_URL = "http://localhost"
 
 
 def pkce_pair() -> tuple[str, str]:
@@ -34,6 +38,17 @@ def pkce_pair() -> tuple[str, str]:
 @pytest.fixture
 def store(tmp_path):
     return TokenStore(tmp_path / "tokens.db")
+
+
+@pytest.fixture
+def oauth_app(store):
+    return build_app(Server("test-server"), store, AsyncMock(), public_url=PUBLIC_URL)
+
+
+@pytest.fixture
+def http(oauth_app):
+    with TestClient(oauth_app, base_url=PUBLIC_URL) as client:
+        yield client
 
 
 @pytest.fixture
@@ -350,3 +365,59 @@ class TestLoginPage:
         )
 
         assert response.status_code == 400
+
+
+class TestNormalizePublicUrl:
+    def test_strips_trailing_slash(self):
+        assert normalize_public_url("https://a.test/") == "https://a.test"
+
+    def test_accepts_https_origin(self):
+        assert normalize_public_url("https://a.test") == "https://a.test"
+
+    @pytest.mark.parametrize(
+        "value",
+        ["", "a.test", "ftp://a.test", "https://a.test/mcp", "https://a.test?x=1"],
+    )
+    def test_rejects_invalid(self, value):
+        with pytest.raises(ValueError):
+            normalize_public_url(value)
+
+
+class TestMetadata:
+    def test_protected_resource_metadata(self, http):
+        body = http.get("/.well-known/oauth-protected-resource/mcp").json()
+
+        assert body["resource"] == f"{PUBLIC_URL}/mcp"
+        assert body["authorization_servers"] == [f"{PUBLIC_URL}/"]
+
+    def test_protected_resource_alias_matches(self, http):
+        alias = http.get("/.well-known/oauth-protected-resource").json()
+        canonical = http.get("/.well-known/oauth-protected-resource/mcp").json()
+
+        assert alias == canonical
+
+    def test_authorization_server_metadata(self, http):
+        body = http.get("/.well-known/oauth-authorization-server").json()
+
+        assert body["code_challenge_methods_supported"] == ["S256"]
+        assert body["registration_endpoint"] == f"{PUBLIC_URL}/register"
+        assert "none" in body["token_endpoint_auth_methods_supported"]
+
+
+class TestUnauthenticatedChallenge:
+    def test_mcp_401_points_at_resource_metadata(self, http):
+        response = http.post("/mcp", json={})
+
+        challenge = response.headers["www-authenticate"]
+        assert response.status_code == 401
+        assert 'resource_metadata="' in challenge
+        assert "/.well-known/oauth-protected-resource/mcp" in challenge
+
+    def test_invalid_token_challenge_names_the_error(self, http):
+        response = http.post("/mcp", json={}, headers={"Authorization": "Bearer nope"})
+
+        assert 'error="invalid_token"' in response.headers["www-authenticate"]
+
+    def test_oauth_routes_do_not_require_a_bearer_token(self, http):
+        assert http.get("/.well-known/oauth-authorization-server").status_code == 200
+        assert http.get("/oauth/login", params={"txn": "x"}).status_code == 400

@@ -10,6 +10,7 @@ import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 import uvicorn
 from mcp.server import Server
@@ -47,29 +48,67 @@ class NormalizeMcpPath:
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
-    """Requires a valid bearer token (checked via TokenStore) on every path
-    except HEALTH_PATH. The resolved token is left on ``request.state.caller``
-    for the usage log."""
+    """Requires a valid bearer token (checked via TokenStore) on the MCP
+    endpoint. Everything else — the health check, and the OAuth endpoints when
+    they are enabled — is public by design. The resolved token is left on
+    ``request.state.caller`` for the usage log."""
 
-    def __init__(self, app, token_store: TokenStore) -> None:
+    def __init__(
+        self, app, token_store: TokenStore, resource_metadata_url: str | None = None
+    ) -> None:
         super().__init__(app)
         self._token_store = token_store
+        self._resource_metadata_url = resource_metadata_url
+
+    def _challenge(self, error: str | None = None) -> str:
+        """RFC 9728 challenge. The resource_metadata pointer is what tells an
+        OAuth client where to discover this server's authorization server."""
+        params = []
+        if error:
+            params.append(f'error="{error}"')
+        if self._resource_metadata_url:
+            params.append(f'resource_metadata="{self._resource_metadata_url}"')
+        return "Bearer " + ", ".join(params) if params else "Bearer"
+
+    def _unauthorized(self, error: str | None = None) -> Response:
+        return PlainTextResponse(
+            "Unauthorized",
+            status_code=401,
+            headers={"WWW-Authenticate": self._challenge(error)},
+        )
 
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
-        if request.url.path == HEALTH_PATH:
+        if not request.url.path.startswith(MCP_PATH):
             return await call_next(request)
 
         auth_header = request.headers.get("authorization", "")
         scheme, _, raw_token = auth_header.partition(" ")
         if scheme.lower() != "bearer" or not raw_token:
-            return PlainTextResponse("Unauthorized", status_code=401)
+            return self._unauthorized()
         caller = self._token_store.resolve(raw_token)
         if caller is None:
-            return PlainTextResponse("Unauthorized", status_code=401)
+            return self._unauthorized("invalid_token")
         request.state.caller = caller
         return await call_next(request)
+
+
+def normalize_public_url(raw: str) -> str:
+    """Validate MCP_PUBLIC_URL and return it without a trailing slash.
+
+    It has to be a bare origin: the OAuth metadata documents are served at
+    fixed paths beneath it, and the value must match the URL a user types
+    into their MCP client minus the /mcp path.
+    """
+    parsed = urlparse(raw.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(
+            "must be an absolute http(s) URL, e.g. https://mcp.example.com"
+        )
+    if parsed.path.strip("/") or parsed.params or parsed.query or parsed.fragment:
+        raise ValueError("must be a bare origin with no path, query, or fragment")
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def _parse_messages(body: bytes) -> list[tuple[str | None, str | None]]:
@@ -174,6 +213,7 @@ def build_app(
     mcp_server: Server,
     token_store: TokenStore,
     on_shutdown: Callable[[], Awaitable[None]],
+    public_url: str | None = None,
 ) -> Starlette:
     session_manager = StreamableHTTPSessionManager(app=mcp_server)
 
@@ -188,14 +228,26 @@ def build_app(
             finally:
                 await on_shutdown()
 
+    routes: list = [Route(HEALTH_PATH, _healthz)]
+    resource_metadata_url: str | None = None
+    if public_url:
+        from unifi_mcp.server._oauth import build_oauth_routes
+
+        oauth_routes, resource_metadata_url = build_oauth_routes(
+            token_store, public_url
+        )
+        routes.extend(oauth_routes)
+    routes.append(Mount(MCP_PATH, app=handle_mcp))
+
     return Starlette(
-        routes=[
-            Route(HEALTH_PATH, _healthz),
-            Mount(MCP_PATH, app=handle_mcp),
-        ],
+        routes=routes,
         middleware=[
             Middleware(NormalizeMcpPath),
-            Middleware(BearerAuthMiddleware, token_store=token_store),
+            Middleware(
+                BearerAuthMiddleware,
+                token_store=token_store,
+                resource_metadata_url=resource_metadata_url,
+            ),
             Middleware(UsageLogMiddleware, token_store=token_store),
         ],
         lifespan=lifespan,
@@ -205,13 +257,21 @@ def build_app(
 def run_http(mcp_server: Server, on_shutdown: Callable[[], Awaitable[None]]) -> None:
     """Run the MCP server over Streamable HTTP.
 
-    Reads MCP_HTTP_HOST (default 0.0.0.0), MCP_HTTP_PORT (default 8765), and
-    TOKEN_DB_PATH (default /data/tokens.db) from the environment.
+    Reads MCP_HTTP_HOST (default 0.0.0.0), MCP_HTTP_PORT (default 8765),
+    TOKEN_DB_PATH (default /data/tokens.db), and the optional MCP_PUBLIC_URL
+    (enables the OAuth endpoints) from the environment.
     """
     host = os.environ.get("MCP_HTTP_HOST", "0.0.0.0")
     port = int(os.environ.get("MCP_HTTP_PORT", "8765"))
     db_path = os.environ.get("TOKEN_DB_PATH", "/data/tokens.db")
+    raw_public_url = os.environ.get("MCP_PUBLIC_URL", "").strip()
+    public_url = None
+    if raw_public_url:
+        try:
+            public_url = normalize_public_url(raw_public_url)
+        except ValueError as exc:
+            raise SystemExit(f"MCP_PUBLIC_URL is invalid: {exc}") from exc
 
     token_store = TokenStore(db_path)
-    app = build_app(mcp_server, token_store, on_shutdown)
+    app = build_app(mcp_server, token_store, on_shutdown, public_url=public_url)
     uvicorn.run(app, host=host, port=port)

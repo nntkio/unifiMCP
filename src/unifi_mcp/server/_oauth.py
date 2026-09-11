@@ -19,6 +19,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
+from mcp.server.auth.handlers.metadata import MetadataHandler
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
@@ -27,8 +28,16 @@ from mcp.server.auth.provider import (
     TokenError,
     construct_redirect_uri,
 )
+from mcp.server.auth.routes import (
+    build_metadata,
+    build_resource_metadata_url,
+    cors_middleware,
+    create_auth_routes,
+    create_protected_resource_routes,
+)
+from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
-from pydantic import AnyUrl, ValidationError
+from pydantic import AnyHttpUrl, AnyUrl, ValidationError
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 from starlette.routing import Route
@@ -46,6 +55,8 @@ GRANT_TTL = timedelta(days=30)
 MAX_LOGIN_ATTEMPTS = 5
 
 LOGIN_PATH = "/oauth/login"
+_METADATA_PATH = "/.well-known/oauth-authorization-server"
+_RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource"
 
 _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 templates = Jinja2Templates(directory=_TEMPLATES_DIR)
@@ -340,3 +351,61 @@ def build_login_routes(store: TokenStore) -> list[Route]:
         Route(LOGIN_PATH, login_page, methods=["GET"]),
         Route(LOGIN_PATH, login_submit, methods=["POST"]),
     ]
+
+
+def build_oauth_routes(store: TokenStore, public_url: str) -> tuple[list[Route], str]:
+    """Routes for the authorization server, and the resource metadata URL.
+
+    The URL comes back so the bearer middleware can point its 401 challenge
+    at it: Claude reads the pointer, fetches the document, and learns where
+    to send the user to sign in.
+    """
+    issuer = AnyHttpUrl(public_url)
+    resource_url = AnyHttpUrl(f"{public_url}/mcp")
+    registration = ClientRegistrationOptions(enabled=True)
+    revocation = RevocationOptions(enabled=True)
+    provider = TokenStoreOAuthProvider(store)
+
+    routes = create_auth_routes(
+        provider=provider,
+        issuer_url=issuer,
+        client_registration_options=registration,
+        revocation_options=revocation,
+    )
+
+    # Claude registers as a public client, and picking a Client ID Metadata
+    # Document over dynamic registration requires "none" to be advertised.
+    # The SDK's own metadata lists only the two client_secret methods.
+    metadata = build_metadata(issuer, None, registration, revocation)
+    metadata.token_endpoint_auth_methods_supported = [
+        "client_secret_post",
+        "client_secret_basic",
+        "none",
+    ]
+    routes = [route for route in routes if route.path != _METADATA_PATH]
+    routes.insert(
+        0,
+        Route(
+            _METADATA_PATH,
+            endpoint=cors_middleware(
+                MetadataHandler(metadata).handle, ["GET", "OPTIONS"]
+            ),
+            methods=["GET", "OPTIONS"],
+        ),
+    )
+
+    resource_routes = create_protected_resource_routes(
+        resource_url=resource_url,
+        authorization_servers=[issuer],
+        resource_name="UniFi MCP",
+    )
+    # Claude probes the path-suffixed URL first and the bare one second; serve
+    # both so a client that skips the WWW-Authenticate pointer still works.
+    alias = Route(
+        _RESOURCE_METADATA_PATH,
+        endpoint=resource_routes[0].endpoint,
+        methods=["GET", "OPTIONS"],
+    )
+
+    routes = routes + resource_routes + [alias] + build_login_routes(store)
+    return routes, str(build_resource_metadata_url(resource_url))
