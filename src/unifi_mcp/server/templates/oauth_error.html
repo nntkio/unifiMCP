@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }} · UniFi MCP</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+         background: #0E0E10; color: #0E0E10;
+         font: 15px/1.5 "Helvetica Neue", Arial, sans-serif; padding: 24px; }
+  .card { width: 100%; max-width: 380px; background: #fff; border-radius: 20px;
+          padding: 32px; box-sizing: border-box; }
+  .eyebrow { font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+             color: #717179; margin-bottom: 8px; }
+  .eyebrow span { color: #E8590C; }
+  h1 { font-size: 22px; margin: 0 0 8px; letter-spacing: -.02em; }
+  p { color: #52525A; margin: 0 0 20px; }
+  .grant { background: #FCFCFD; border: 1px solid #E8E8EB; border-radius: 10px;
+           padding: 12px; font-size: 13px; color: #52525A; margin-bottom: 20px; }
+  .grant b { color: #0E0E10; }
+  label { display: block; font-size: 12px; letter-spacing: .08em;
+          text-transform: uppercase; color: #717179; margin-bottom: 6px; }
+  input { width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 15px;
+          border: 1px solid #DFDFE3; border-radius: 10px; margin-bottom: 16px; }
+  button { font: inherit; border-radius: 10px; padding: 11px 16px; cursor: pointer;
+           border: 1px solid transparent; }
+  .primary { width: 100%; background: #E8590C; color: #fff; font-weight: 600; }
+  .primary:hover { background: #C7480A; }
+  .ghost { width: 100%; background: transparent; color: #52525A;
+           border-color: #DFDFE3; margin-top: 10px; }
+  .alert { background: #FDECEA; color: #C0392B; border-radius: 10px;
+           padding: 10px 12px; margin-bottom: 16px; font-size: 14px; }
+  .foot { margin-top: 22px; font-size: 12px; color: #717179; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="eyebrow"><span>/</span> UniFi MCP</div>
+    <h1>{{ title }}</h1>
+    <p>{{ message }}</p>
+    <div class="foot">seeg development · UniFi MCP</div>
+  </div>
+</body>
+</html>

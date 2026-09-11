@@ -4,13 +4,20 @@ import base64
 import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from mcp.server.auth.provider import AuthorizationParams
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
+from starlette.applications import Starlette
+from starlette.testclient import TestClient
 
-from unifi_mcp.server._oauth import TokenStoreOAuthProvider, client_label
+from unifi_mcp.server._oauth import (
+    TokenStoreOAuthProvider,
+    build_login_routes,
+    client_label,
+)
 from unifi_mcp.tokens import TokenStore
 
 REDIRECT_URI = "https://claude.ai/api/mcp/auth_callback"
@@ -32,6 +39,33 @@ def store(tmp_path):
 @pytest.fixture
 def provider(store):
     return TokenStoreOAuthProvider(store)
+
+
+@pytest.fixture
+def login_client(store):
+    app = Starlette(routes=build_login_routes(store))
+    return TestClient(app, base_url="http://localhost")
+
+
+def _pending(store, state="state-123"):
+    store.save_oauth_client(
+        "client-1",
+        OAuthClientInformationFull(
+            client_id="client-1",
+            client_name="Claude",
+            redirect_uris=[REDIRECT_URI],
+        ).model_dump_json(),
+    )
+    return store.create_authorization(
+        client_id="client-1",
+        redirect_uri=REDIRECT_URI,
+        redirect_uri_explicit=True,
+        code_challenge="challenge",
+        state=state,
+        scope="",
+        resource=None,
+        expires_at=(datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
+    )
 
 
 @pytest.fixture
@@ -216,3 +250,103 @@ class TestAccessTokensAndRevocation:
         await provider.revoke_token(loaded)
 
         assert store.resolve(tokens.access_token) is None
+
+
+class TestLoginPage:
+    def test_get_renders_form_with_client_and_redirect_host(self, login_client, store):
+        txn_id = _pending(store)
+
+        response = login_client.get("/oauth/login", params={"txn": txn_id})
+
+        assert response.status_code == 200
+        assert "Claude" in response.text
+        assert "claude.ai" in response.text
+        assert txn_id in response.text
+
+    def test_get_unknown_txn_is_400(self, login_client):
+        response = login_client.get("/oauth/login", params={"txn": "nope"})
+
+        assert response.status_code == 400
+
+    def test_get_without_txn_is_400(self, login_client):
+        assert login_client.get("/oauth/login").status_code == 400
+
+    def test_post_valid_credentials_redirects_with_code_and_state(
+        self, login_client, store
+    ):
+        store.create_account("alice", "hunter2")
+        txn_id = _pending(store)
+
+        response = login_client.post(
+            "/oauth/login",
+            data={"txn": txn_id, "username": "alice", "password": "hunter2"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        query = parse_qs(urlparse(response.headers["location"]).query)
+        assert query["state"] == ["state-123"]
+        assert store.consume_authorization_code(query["code"][0]) is not None
+
+    def test_post_wrong_password_rerenders_with_error(self, login_client, store):
+        store.create_account("alice", "hunter2")
+        txn_id = _pending(store)
+
+        response = login_client.post(
+            "/oauth/login",
+            data={"txn": txn_id, "username": "alice", "password": "wrong"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 200
+        assert "Invalid username or password" in response.text
+
+    def test_post_unknown_user_rerenders_with_same_error(self, login_client, store):
+        txn_id = _pending(store)
+
+        response = login_client.post(
+            "/oauth/login",
+            data={"txn": txn_id, "username": "nobody", "password": "hunter2"},
+            follow_redirects=False,
+        )
+
+        assert "Invalid username or password" in response.text
+
+    def test_fifth_failure_burns_the_link(self, login_client, store):
+        store.create_account("alice", "hunter2")
+        txn_id = _pending(store)
+
+        for _ in range(4):
+            login_client.post(
+                "/oauth/login",
+                data={"txn": txn_id, "username": "alice", "password": "wrong"},
+            )
+        response = login_client.post(
+            "/oauth/login",
+            data={"txn": txn_id, "username": "alice", "password": "wrong"},
+        )
+
+        assert response.status_code == 400
+        assert store.get_authorization(txn_id) is None
+
+    def test_cancel_redirects_with_access_denied(self, login_client, store):
+        txn_id = _pending(store)
+
+        response = login_client.post(
+            "/oauth/login",
+            data={"txn": txn_id, "cancel": "1"},
+            follow_redirects=False,
+        )
+
+        query = parse_qs(urlparse(response.headers["location"]).query)
+        assert query["error"] == ["access_denied"]
+        assert query["state"] == ["state-123"]
+        assert store.get_authorization(txn_id) is None
+
+    def test_post_unknown_txn_is_400(self, login_client):
+        response = login_client.post(
+            "/oauth/login",
+            data={"txn": "nope", "username": "alice", "password": "hunter2"},
+        )
+
+        assert response.status_code == 400

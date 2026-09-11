@@ -15,7 +15,9 @@ row rather than adding a new one, so the UI shows one entry per sign-in
 instead of one per hour.
 """
 
+import os
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlparse
 
 from mcp.server.auth.provider import (
     AccessToken,
@@ -23,9 +25,14 @@ from mcp.server.auth.provider import (
     AuthorizationParams,
     RefreshToken,
     TokenError,
+    construct_redirect_uri,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
-from pydantic import AnyUrl
+from pydantic import AnyUrl, ValidationError
+from starlette.requests import Request
+from starlette.responses import RedirectResponse, Response
+from starlette.routing import Route
+from starlette.templating import Jinja2Templates
 
 from unifi_mcp.tokens import TokenStore
 
@@ -39,6 +46,15 @@ GRANT_TTL = timedelta(days=30)
 MAX_LOGIN_ATTEMPTS = 5
 
 LOGIN_PATH = "/oauth/login"
+
+_TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
+templates = Jinja2Templates(directory=_TEMPLATES_DIR)
+
+_BAD_LINK_TITLE = "This sign-in link has expired"
+_BAD_LINK_MESSAGE = (
+    "Sign-in links are valid for a few minutes and can only be used once. "
+    "Start again from the application you were connecting."
+)
 
 
 def _iso_in(delta: timedelta) -> str:
@@ -217,3 +233,110 @@ class TokenStoreOAuthProvider:
             self._store.revoke_by_refresh_token(token.token)
         else:
             self._store.revoke_token_by_value(token.token)
+
+
+def _error_page(request: Request, title: str, message: str) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "oauth_error.html",
+        {"title": title, "message": message},
+        status_code=400,
+    )
+
+
+def build_login_routes(store: TokenStore) -> list[Route]:
+    """The sign-in page an authorisation redirects the user's browser to."""
+
+    async def _render_form(
+        request: Request,
+        txn_id: str,
+        client_name: str,
+        redirect_uri: str,
+        error: str | None,
+    ) -> Response:
+        return templates.TemplateResponse(
+            request,
+            "oauth_login.html",
+            {
+                "txn": txn_id,
+                "client_name": client_name,
+                "redirect_host": urlparse(redirect_uri).netloc,
+                "error": error,
+            },
+            status_code=200,
+        )
+
+    def _client_name(client_id: str) -> str:
+        """Display name for the consent line. A stored document that no longer
+        parses must not break sign-in, so fall back to a neutral label."""
+        raw = store.get_oauth_client(client_id)
+        if raw is None:
+            return "An application"
+        try:
+            client = OAuthClientInformationFull.model_validate_json(raw)
+        except ValidationError:
+            return "An application"
+        return (client.client_name or "").strip() or "An application"
+
+    async def login_page(request: Request) -> Response:
+        txn_id = request.query_params.get("txn", "")
+        record = store.get_authorization(txn_id) if txn_id else None
+        if record is None:
+            return _error_page(request, _BAD_LINK_TITLE, _BAD_LINK_MESSAGE)
+        return await _render_form(
+            request,
+            txn_id,
+            _client_name(record.client_id),
+            record.redirect_uri,
+            None,
+        )
+
+    async def login_submit(request: Request) -> Response:
+        form = await request.form()
+        txn_id = str(form.get("txn", ""))
+        record = store.get_authorization(txn_id) if txn_id else None
+        if record is None:
+            return _error_page(request, _BAD_LINK_TITLE, _BAD_LINK_MESSAGE)
+
+        if form.get("cancel"):
+            store.delete_authorization(txn_id)
+            return RedirectResponse(
+                construct_redirect_uri(
+                    record.redirect_uri, error="access_denied", state=record.state
+                ),
+                status_code=303,
+            )
+
+        username = str(form.get("username", ""))
+        password = str(form.get("password", ""))
+        owner_id = store.verify_account_password(username, password)
+        if owner_id is None:
+            # Root lives in environment variables with no accounts row, so it
+            # can never authorise a connector — the same rule that stops it
+            # owning a bearer token.
+            remaining = store.fail_authorization_attempt(txn_id, MAX_LOGIN_ATTEMPTS)
+            if remaining == 0:
+                return _error_page(
+                    request,
+                    "Too many attempts",
+                    "This sign-in link has been cancelled. Start again from the "
+                    "application you were connecting.",
+                )
+            return await _render_form(
+                request,
+                txn_id,
+                _client_name(record.client_id),
+                record.redirect_uri,
+                "Invalid username or password",
+            )
+
+        code = store.complete_authorization(txn_id, owner_id)
+        return RedirectResponse(
+            construct_redirect_uri(record.redirect_uri, code=code, state=record.state),
+            status_code=303,
+        )
+
+    return [
+        Route(LOGIN_PATH, login_page, methods=["GET"]),
+        Route(LOGIN_PATH, login_submit, methods=["POST"]),
+    ]
