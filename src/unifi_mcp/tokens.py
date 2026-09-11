@@ -60,6 +60,45 @@ CREATE TABLE IF NOT EXISTS usage_log (
     duration_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS usage_log_ts ON usage_log (ts);
+
+-- OAuth clients registered by an MCP client through RFC 7591 dynamic
+-- registration. client_json is the full OAuthClientInformationFull document.
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id   TEXT PRIMARY KEY,
+    client_json TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
+-- One row per authorisation attempt, from /authorize until the code is
+-- exchanged (row deleted) or it expires. owner_id and code_hash are set
+-- when the user signs in successfully.
+CREATE TABLE IF NOT EXISTS oauth_authorizations (
+    id                    TEXT PRIMARY KEY,
+    client_id             TEXT NOT NULL REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+    redirect_uri          TEXT NOT NULL,
+    redirect_uri_explicit INTEGER NOT NULL,
+    code_challenge        TEXT NOT NULL,
+    state                 TEXT,
+    scope                 TEXT NOT NULL DEFAULT '',
+    resource              TEXT,
+    created_at            TEXT NOT NULL,
+    expires_at            TEXT NOT NULL,
+    attempts              INTEGER NOT NULL DEFAULT 0,
+    owner_id              INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
+    code_hash             TEXT UNIQUE
+);
+
+-- Refresh tokens for OAuth-issued access tokens. token_id points at the
+-- tokens row the access token lives in, so revoking or deleting that row
+-- takes the refresh token with it.
+CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+    token_hash       TEXT PRIMARY KEY,
+    token_id         INTEGER NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
+    client_id        TEXT NOT NULL,
+    scope            TEXT NOT NULL DEFAULT '',
+    grant_expires_at TEXT NOT NULL,
+    created_at       TEXT NOT NULL
+);
 """
 
 _TOKEN_COLUMNS = (
@@ -216,6 +255,10 @@ class TokenNotOwnedError(Exception):
     """Raised when revoking a token that doesn't exist or isn't owned by the requester."""
 
 
+class AuthorizationNotFoundError(Exception):
+    """Raised when completing an authorisation that doesn't exist or has expired."""
+
+
 class TokenStore:
     """SQLite-backed storage for accounts, their bearer tokens, and usage."""
 
@@ -362,6 +405,53 @@ class TokenStore:
 
     def validate(self, raw_token: str) -> bool:
         return self.resolve(raw_token) is not None
+
+    def get_token(self, token_id: int) -> TokenRecord | None:
+        """Return a token row by id, whatever its revoked/expired state."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                _TOKEN_SELECT + " WHERE tokens.id = ?", (token_id,)
+            ).fetchone()
+        return TokenRecord(**dict(row)) if row else None
+
+    def rotate_token(self, token_id: int, expires_at: str | None) -> str:
+        """Give an existing token row a new secret and expiry, and return it.
+
+        Used when an OAuth refresh mints a new access token: keeping the row
+        means the admin UI shows one entry per connector sign-in rather than
+        one per hourly refresh, and the usage log stays attributed to it.
+        """
+        raw_token = secrets.token_urlsafe(32)
+        with closing(self._connect()) as conn:
+            cursor = conn.execute(
+                "UPDATE tokens SET token_hash = ?, expires_at = ? "
+                "WHERE id = ? AND revoked_at IS NULL",
+                (_hash_token(raw_token), expires_at, token_id),
+            )
+            conn.commit()
+        if cursor.rowcount == 0:
+            raise TokenNotOwnedError(token_id)
+        return raw_token
+
+    # ── OAuth clients ───────────────────────────────────────────
+
+    def save_oauth_client(self, client_id: str, client_json: str) -> None:
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT INTO oauth_clients (client_id, client_json, created_at) "
+                "VALUES (?, ?, ?) ON CONFLICT(client_id) DO UPDATE SET "
+                "client_json = excluded.client_json",
+                (client_id, client_json, _now()),
+            )
+            conn.commit()
+
+    def get_oauth_client(self, client_id: str) -> str | None:
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT client_json FROM oauth_clients WHERE client_id = ?",
+                (client_id,),
+            ).fetchone()
+        return row["client_json"] if row else None
 
     # ── usage log ─────────────────────────────────────────────────────────
 

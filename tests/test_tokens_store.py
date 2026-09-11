@@ -459,3 +459,74 @@ class TestSetAccountPassword:
         store.set_account_password(alice_id, "newpass9")
 
         assert store.validate(raw_token) is True
+
+
+class TestOAuthClients:
+    def test_get_oauth_client_unknown_returns_none(self, store):
+        assert store.get_oauth_client("nope") is None
+
+    def test_save_then_get_oauth_client_round_trips(self, store):
+        store.save_oauth_client("abc", '{"client_id": "abc"}')
+
+        assert store.get_oauth_client("abc") == '{"client_id": "abc"}'
+
+    def test_save_oauth_client_twice_overwrites(self, store):
+        store.save_oauth_client("abc", '{"v": 1}')
+        store.save_oauth_client("abc", '{"v": 2}')
+
+        assert store.get_oauth_client("abc") == '{"v": 2}'
+
+
+class TestTokenRotation:
+    def test_get_token_returns_record(self, store):
+        owner_id = store.create_account("alice", "hunter2")
+        store.create_token(owner_id, "laptop", None)
+        token_id = store.list_tokens(owner_id)[0].id
+
+        assert store.get_token(token_id).label == "laptop"
+
+    def test_get_token_unknown_returns_none(self, store):
+        assert store.get_token(999) is None
+
+    def test_rotate_token_invalidates_old_secret(self, store):
+        owner_id = store.create_account("alice", "hunter2")
+        old = store.create_token(owner_id, "laptop", None)
+        token_id = store.list_tokens(owner_id)[0].id
+
+        new = store.rotate_token(token_id, None)
+
+        assert store.resolve(old) is None
+        assert store.resolve(new).id == token_id
+
+    def test_rotate_token_keeps_row_identity(self, store):
+        owner_id = store.create_account("alice", "hunter2")
+        store.create_token(owner_id, "laptop", None)
+        before = store.list_tokens(owner_id)[0]
+
+        store.rotate_token(before.id, None)
+        after = store.list_tokens(owner_id)[0]
+
+        assert (after.id, after.label, after.created_at) == (
+            before.id,
+            before.label,
+            before.created_at,
+        )
+
+    def test_rotate_token_sets_new_expiry(self, store):
+        owner_id = store.create_account("alice", "hunter2")
+        store.create_token(owner_id, "laptop", None)
+        token_id = store.list_tokens(owner_id)[0].id
+        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+
+        store.rotate_token(token_id, future)
+
+        assert store.get_token(token_id).expires_at == future
+
+    def test_rotate_revoked_token_raises(self, store):
+        owner_id = store.create_account("alice", "hunter2")
+        store.create_token(owner_id, "laptop", None)
+        token_id = store.list_tokens(owner_id)[0].id
+        store.revoke_token(token_id, requesting_owner_id=owner_id)
+
+        with pytest.raises(TokenNotOwnedError):
+            store.rotate_token(token_id, None)
