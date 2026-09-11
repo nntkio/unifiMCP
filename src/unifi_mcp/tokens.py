@@ -121,6 +121,13 @@ _ACCOUNT_SELECT = (
     "FROM accounts LEFT JOIN tokens ON tokens.owner_id = accounts.id"
 )
 
+_REFRESH_SELECT = (
+    "SELECT oauth_refresh_tokens.token_id, oauth_refresh_tokens.client_id, "
+    "oauth_refresh_tokens.scope, oauth_refresh_tokens.grant_expires_at, "
+    "tokens.owner_id, tokens.revoked_at "
+    "FROM oauth_refresh_tokens JOIN tokens ON tokens.id = oauth_refresh_tokens.token_id"
+)
+
 # code_hash is deliberately excluded: it never leaves the store.
 _AUTHORIZATION_COLUMNS = (
     "id, client_id, redirect_uri, redirect_uri_explicit, code_challenge, state, "
@@ -265,6 +272,18 @@ class UsageSummary:
     calls_last_7_days: int
     callers_last_7_days: int
     ips_last_7_days: int
+
+
+@dataclass
+class RefreshRecord:
+    """A refresh token joined to the access-token row it refreshes."""
+
+    token_id: int
+    client_id: str
+    scope: str
+    grant_expires_at: str
+    owner_id: int
+    revoked_at: str | None
 
 
 def _authorization_from_row(row: sqlite3.Row) -> AuthorizationRecord:
@@ -588,6 +607,93 @@ class TokenStore:
     def delete_authorization(self, txn_id: str) -> None:
         with closing(self._connect()) as conn:
             conn.execute("DELETE FROM oauth_authorizations WHERE id = ?", (txn_id,))
+            conn.commit()
+
+    # ── OAuth refresh tokens ────────────────────────────────────
+
+    def create_refresh_token(
+        self,
+        *,
+        token_id: int,
+        client_id: str,
+        scope: str,
+        grant_expires_at: str,
+    ) -> str:
+        """Issue a refresh token for an access-token row and return it."""
+        raw_token = secrets.token_urlsafe(32)
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT INTO oauth_refresh_tokens (token_hash, token_id, client_id, "
+                "scope, grant_expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    _hash_token(raw_token),
+                    token_id,
+                    client_id,
+                    scope,
+                    grant_expires_at,
+                    _now(),
+                ),
+            )
+            conn.commit()
+        return raw_token
+
+    def get_refresh_token(self, raw_token: str) -> RefreshRecord | None:
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                _REFRESH_SELECT + " WHERE oauth_refresh_tokens.token_hash = ?",
+                (_hash_token(raw_token),),
+            ).fetchone()
+        return RefreshRecord(**dict(row)) if row else None
+
+    def delete_refresh_token(self, raw_token: str) -> None:
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "DELETE FROM oauth_refresh_tokens WHERE token_hash = ?",
+                (_hash_token(raw_token),),
+            )
+            conn.commit()
+
+    def get_oauth_client_id_for_token(self, token_id: int) -> str | None:
+        """The OAuth client a token row was issued to, or None if hand-made."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT client_id FROM oauth_refresh_tokens WHERE token_id = ?",
+                (token_id,),
+            ).fetchone()
+        return row["client_id"] if row else None
+
+    def revoke_token_by_value(self, raw_token: str) -> None:
+        """Revoke the token row holding this secret and drop its refresh tokens."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT id FROM tokens WHERE token_hash = ?",
+                (_hash_token(raw_token),),
+            ).fetchone()
+            if row is None:
+                return
+            conn.execute(
+                "UPDATE tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                (_now(), row["id"]),
+            )
+            conn.execute(
+                "DELETE FROM oauth_refresh_tokens WHERE token_id = ?", (row["id"],)
+            )
+            conn.commit()
+
+    def revoke_by_refresh_token(self, raw_token: str) -> None:
+        """Revoke the access token a refresh token belongs to, and itself."""
+        record = self.get_refresh_token(raw_token)
+        if record is None:
+            return
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "UPDATE tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                (_now(), record.token_id),
+            )
+            conn.execute(
+                "DELETE FROM oauth_refresh_tokens WHERE token_id = ?",
+                (record.token_id,),
+            )
             conn.commit()
 
     # ── usage log ─────────────────────────────────────────────────────────
