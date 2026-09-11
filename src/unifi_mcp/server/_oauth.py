@@ -17,9 +17,11 @@ instead of one per hour.
 
 import os
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from mcp.server.auth.handlers.metadata import MetadataHandler
+from mcp.server.auth.handlers.revoke import RevocationHandler
+from mcp.server.auth.middleware.client_auth import ClientAuthenticator
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
@@ -57,6 +59,7 @@ MAX_LOGIN_ATTEMPTS = 5
 LOGIN_PATH = "/oauth/login"
 _METADATA_PATH = "/.well-known/oauth-authorization-server"
 _RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource"
+REVOCATION_PATH = "/revoke"
 
 _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 templates = Jinja2Templates(directory=_TEMPLATES_DIR)
@@ -394,6 +397,17 @@ def build_oauth_routes(store: TokenStore, public_url: str) -> tuple[list[Route],
         ),
     )
 
+    routes = [route for route in routes if route.path != REVOCATION_PATH]
+    routes.append(
+        Route(
+            REVOCATION_PATH,
+            endpoint=cors_middleware(
+                _public_client_revocation_handler(provider), ["POST", "OPTIONS"]
+            ),
+            methods=["POST", "OPTIONS"],
+        )
+    )
+
     resource_routes = create_protected_resource_routes(
         resource_url=resource_url,
         authorization_servers=[issuer],
@@ -409,3 +423,40 @@ def build_oauth_routes(store: TokenStore, public_url: str) -> tuple[list[Route],
 
     routes = routes + resource_routes + [alias] + build_login_routes(store)
     return routes, str(build_resource_metadata_url(resource_url))
+
+
+def _public_client_revocation_handler(provider: TokenStoreOAuthProvider):
+    """RFC 7009 revocation that works for public clients.
+
+    The SDK's revocation request model makes ``client_secret`` a required
+    field, even for a client registered with ``token_endpoint_auth_method:
+    "none"`` — which every Claude connector is, since Claude registers as a
+    public client. Such a client sends only ``client_id``, and the SDK
+    handler rejects it with a 400 before authentication is even attempted.
+    Supply an empty secret when one is missing so the endpoint we advertise
+    in our metadata actually works.
+    """
+    handler = RevocationHandler(provider, ClientAuthenticator(provider))
+
+    async def revoke(request: Request) -> Response:
+        form = await request.form()
+        if "client_secret" in form:
+            return await handler.handle(request)
+
+        payload = urlencode(
+            [(key, str(value)) for key, value in form.multi_items()]
+            + [("client_secret", "")]
+        ).encode()
+        scope = dict(request.scope)
+        scope["headers"] = [
+            (name, value)
+            for name, value in scope["headers"]
+            if name.lower() != b"content-length"
+        ] + [(b"content-length", str(len(payload)).encode())]
+
+        async def receive() -> dict:
+            return {"type": "http.request", "body": payload, "more_body": False}
+
+        return await handler.handle(Request(scope, receive))
+
+    return revoke

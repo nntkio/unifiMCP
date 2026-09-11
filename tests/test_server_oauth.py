@@ -421,3 +421,223 @@ class TestUnauthenticatedChallenge:
     def test_oauth_routes_do_not_require_a_bearer_token(self, http):
         assert http.get("/.well-known/oauth-authorization-server").status_code == 200
         assert http.get("/oauth/login", params={"txn": "x"}).status_code == 400
+
+
+def _register(http) -> str:
+    response = http.post(
+        "/register",
+        json={
+            "redirect_uris": [REDIRECT_URI],
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "client_name": "Claude",
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body.get("client_secret") is None
+    return body["client_id"]
+
+
+def _sign_in(http, client_id, challenge, username="alice", state="state-123"):
+    """Drive /authorize and the login form, and return the authorization code."""
+    authorize = http.get(
+        "/authorize",
+        params={
+            "client_id": client_id,
+            "redirect_uri": REDIRECT_URI,
+            "response_type": "code",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": state,
+        },
+        follow_redirects=False,
+    )
+    assert authorize.status_code == 302, authorize.text
+    txn_id = parse_qs(urlparse(authorize.headers["location"]).query)["txn"][0]
+
+    submit = http.post(
+        "/oauth/login",
+        data={"txn": txn_id, "username": username, "password": "hunter2"},
+        follow_redirects=False,
+    )
+    assert submit.status_code == 303
+    query = parse_qs(urlparse(submit.headers["location"]).query)
+    assert query["state"] == [state]
+    return query["code"][0]
+
+
+def _exchange(http, client_id, code, verifier):
+    return http.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "client_id": client_id,
+            "redirect_uri": REDIRECT_URI,
+            "code_verifier": verifier,
+        },
+    )
+
+
+class TestConnectorFlow:
+    def test_full_flow_issues_a_working_token(self, http, store):
+        store.create_account("alice", "hunter2")
+        verifier, challenge = pkce_pair()
+        client_id = _register(http)
+
+        code = _sign_in(http, client_id, challenge)
+        tokens = _exchange(http, client_id, code, verifier).json()
+
+        assert tokens["token_type"] == "Bearer"
+        assert tokens["expires_in"] == 3600
+        mcp = http.post(
+            "/mcp",
+            json={},
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+        assert mcp.status_code != 401
+
+    def test_issued_token_is_visible_to_the_admin_ui(self, http, store):
+        owner_id = store.create_account("alice", "hunter2")
+        verifier, challenge = pkce_pair()
+        client_id = _register(http)
+
+        code = _sign_in(http, client_id, challenge)
+        _exchange(http, client_id, code, verifier)
+
+        tokens = store.list_tokens(owner_id)
+        assert [token.label for token in tokens] == ["OAuth · Claude"]
+
+    def test_code_cannot_be_exchanged_twice(self, http, store):
+        store.create_account("alice", "hunter2")
+        verifier, challenge = pkce_pair()
+        client_id = _register(http)
+        code = _sign_in(http, client_id, challenge)
+        _exchange(http, client_id, code, verifier)
+
+        second = _exchange(http, client_id, code, verifier)
+
+        assert second.status_code == 400
+        assert second.json()["error"] == "invalid_grant"
+
+    def test_wrong_code_verifier_is_rejected_and_burns_the_code(self, http, store):
+        store.create_account("alice", "hunter2")
+        _, challenge = pkce_pair()
+        other_verifier, _ = pkce_pair()
+        client_id = _register(http)
+        code = _sign_in(http, client_id, challenge)
+
+        first = _exchange(http, client_id, code, other_verifier)
+
+        assert first.json()["error"] == "invalid_grant"
+        assert store.consume_authorization_code(code) is None
+
+    def test_refresh_returns_a_working_token_and_retires_the_old_one(self, http, store):
+        store.create_account("alice", "hunter2")
+        verifier, challenge = pkce_pair()
+        client_id = _register(http)
+        code = _sign_in(http, client_id, challenge)
+        tokens = _exchange(http, client_id, code, verifier).json()
+
+        refreshed = http.post(
+            "/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": tokens["refresh_token"],
+                "client_id": client_id,
+            },
+        ).json()
+
+        assert store.resolve(tokens["access_token"]) is None
+        assert store.resolve(refreshed["access_token"]) is not None
+        assert (
+            http.post(
+                "/mcp",
+                json={},
+                headers={"Authorization": f"Bearer {refreshed['access_token']}"},
+            ).status_code
+            != 401
+        )
+
+    def test_revoking_in_the_admin_ui_ends_the_session(self, http, store):
+        owner_id = store.create_account("alice", "hunter2")
+        verifier, challenge = pkce_pair()
+        client_id = _register(http)
+        code = _sign_in(http, client_id, challenge)
+        tokens = _exchange(http, client_id, code, verifier).json()
+
+        token_id = store.list_tokens(owner_id)[0].id
+        store.revoke_token(token_id, requesting_owner_id=owner_id)
+
+        refreshed = http.post(
+            "/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": tokens["refresh_token"],
+                "client_id": client_id,
+            },
+        )
+        assert refreshed.json()["error"] == "invalid_grant"
+
+    def test_revocation_endpoint_kills_the_token(self, http, store):
+        store.create_account("alice", "hunter2")
+        verifier, challenge = pkce_pair()
+        client_id = _register(http)
+        code = _sign_in(http, client_id, challenge)
+        tokens = _exchange(http, client_id, code, verifier).json()
+
+        response = http.post(
+            "/revoke",
+            data={"token": tokens["access_token"], "client_id": client_id},
+        )
+
+        assert response.status_code == 200
+        assert store.resolve(tokens["access_token"]) is None
+
+    def test_authorize_rejects_an_unregistered_redirect_uri(self, http, store):
+        store.create_account("alice", "hunter2")
+        _, challenge = pkce_pair()
+        client_id = _register(http)
+
+        response = http.get(
+            "/authorize",
+            params={
+                "client_id": client_id,
+                "redirect_uri": "https://evil.test/callback",
+                "response_type": "code",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+            },
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 400
+
+    def test_root_cannot_sign_in(self, http, store, monkeypatch):
+        monkeypatch.setenv("ROOT_ADMIN_USERNAME", "root")
+        monkeypatch.setenv("ROOT_ADMIN_PASSWORD", "root-password")
+        _, challenge = pkce_pair()
+        client_id = _register(http)
+        authorize = http.get(
+            "/authorize",
+            params={
+                "client_id": client_id,
+                "redirect_uri": REDIRECT_URI,
+                "response_type": "code",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+            },
+            follow_redirects=False,
+        )
+        txn_id = parse_qs(urlparse(authorize.headers["location"]).query)["txn"][0]
+
+        response = http.post(
+            "/oauth/login",
+            data={"txn": txn_id, "username": "root", "password": "root-password"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 200
+        assert "Invalid username or password" in response.text
