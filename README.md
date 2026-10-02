@@ -132,6 +132,7 @@ working with that file in place.
 | `MCP_HTTP_HOST` | Bind host (HTTP mode only) | `0.0.0.0` |
 | `MCP_HTTP_PORT` | Bind port (HTTP mode only) | `8765` |
 | `TOKEN_DB_PATH` | SQLite database shared with the token-admin service (HTTP mode only) | `/data/tokens.db` |
+| `MCP_PUBLIC_URL` | Public origin of the MCP service (e.g. `https://unifi-mcp.example.com`). Setting it enables the OAuth endpoints needed for Claude custom connectors. | unset |
 
 ### Token-admin service (HTTP mode only)
 
@@ -294,12 +295,11 @@ that the MCP server validates, with no network call between them.
      --header "Authorization: Bearer <token>"
    ```
 
-   Claude Desktop's config file only launches local commands, so it needs
-   a small bridge to reach a remote URL with a bearer header; see the
-   [usage guide](docs/usage-guide.md#connecting-to-the-network-service).
-   Other clients that support remote Streamable HTTP servers need the same
-   two pieces of information, typically in this shape (check your client's
-   documentation for its exact format):
+   Claude Desktop's config file only launches local commands, so a remote
+   URL with a bearer header needs either a bridge or the connector flow
+   below. Other clients that support remote Streamable HTTP servers need the
+   same two pieces of information, typically in this shape (check your
+   client's documentation for its exact format):
 
    ```json
    {
@@ -313,6 +313,30 @@ that the MCP server validates, with no network call between them.
      }
    }
    ```
+
+### Claude Desktop and claude.ai (custom connector)
+
+Claude's **Settings → Connectors → Add custom connector** does not accept a
+static bearer token outside a limited beta, and it reaches the server from
+Anthropic's infrastructure rather than from your machine. Two things are
+therefore needed: the endpoint must be published on public HTTPS, and the
+server must speak OAuth.
+
+Set `MCP_PUBLIC_URL` to the public origin and the server exposes an OAuth
+authorization server alongside `/mcp`: dynamic client registration, an
+authorize endpoint, a sign-in page, and token and revocation endpoints. The
+access token Claude receives is an ordinary row in the token database, so it
+shows up in the admin UI under the account that signed in, is revocable
+there, and is recorded in the usage log like any other token. A refresh
+rotates the secret on that same row, so one sign-in stays one row.
+
+To publish the endpoint without opening a port, see
+[docs/qnap-deployment.md](docs/qnap-deployment.md#publishing-the-mcp-endpoint-with-a-cloudflare-tunnel).
+For the steps inside Claude, see
+[docs/usage-guide.md](docs/usage-guide.md#adding-the-server-as-a-claude-connector).
+
+Claude Code does not use this flow. It authenticates with a static bearer
+token, which works unchanged over the LAN or the public URL.
 
 ### Things that bite
 

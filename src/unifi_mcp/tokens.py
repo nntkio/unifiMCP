@@ -60,6 +60,45 @@ CREATE TABLE IF NOT EXISTS usage_log (
     duration_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS usage_log_ts ON usage_log (ts);
+
+-- OAuth clients registered by an MCP client through RFC 7591 dynamic
+-- registration. client_json is the full OAuthClientInformationFull document.
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id   TEXT PRIMARY KEY,
+    client_json TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
+-- One row per authorisation attempt, from /authorize until the code is
+-- exchanged (row deleted) or it expires. owner_id and code_hash are set
+-- when the user signs in successfully.
+CREATE TABLE IF NOT EXISTS oauth_authorizations (
+    id                    TEXT PRIMARY KEY,
+    client_id             TEXT NOT NULL REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+    redirect_uri          TEXT NOT NULL,
+    redirect_uri_explicit INTEGER NOT NULL,
+    code_challenge        TEXT NOT NULL,
+    state                 TEXT,
+    scope                 TEXT NOT NULL DEFAULT '',
+    resource              TEXT,
+    created_at            TEXT NOT NULL,
+    expires_at            TEXT NOT NULL,
+    attempts              INTEGER NOT NULL DEFAULT 0,
+    owner_id              INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
+    code_hash             TEXT UNIQUE
+);
+
+-- Refresh tokens for OAuth-issued access tokens. token_id points at the
+-- tokens row the access token lives in, so revoking or deleting that row
+-- takes the refresh token with it.
+CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+    token_hash       TEXT PRIMARY KEY,
+    token_id         INTEGER NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
+    client_id        TEXT NOT NULL,
+    scope            TEXT NOT NULL DEFAULT '',
+    grant_expires_at TEXT NOT NULL,
+    created_at       TEXT NOT NULL
+);
 """
 
 _TOKEN_COLUMNS = (
@@ -80,6 +119,19 @@ _ACCOUNT_SELECT = (
     "AND (tokens.expires_at IS NULL OR tokens.expires_at > ?) "
     "THEN 1 ELSE 0 END), 0) AS active_token_count "
     "FROM accounts LEFT JOIN tokens ON tokens.owner_id = accounts.id"
+)
+
+_REFRESH_SELECT = (
+    "SELECT oauth_refresh_tokens.token_id, oauth_refresh_tokens.client_id, "
+    "oauth_refresh_tokens.scope, oauth_refresh_tokens.grant_expires_at, "
+    "tokens.owner_id, tokens.revoked_at "
+    "FROM oauth_refresh_tokens JOIN tokens ON tokens.id = oauth_refresh_tokens.token_id"
+)
+
+# code_hash is deliberately excluded: it never leaves the store.
+_AUTHORIZATION_COLUMNS = (
+    "id, client_id, redirect_uri, redirect_uri_explicit, code_challenge, state, "
+    "scope, resource, created_at, expires_at, attempts, owner_id"
 )
 
 _USAGE_COLUMNS = (
@@ -105,6 +157,24 @@ class TokenRecord:
     created_at: str
     expires_at: str | None
     revoked_at: str | None
+
+
+@dataclass
+class AuthorizationRecord:
+    """One pending OAuth authorisation, between /authorize and the code exchange."""
+
+    id: str
+    client_id: str
+    redirect_uri: str
+    redirect_uri_explicit: bool
+    code_challenge: str
+    state: str | None
+    scope: str
+    resource: str | None
+    created_at: str
+    expires_at: str
+    attempts: int
+    owner_id: int | None
 
 
 @dataclass
@@ -204,6 +274,24 @@ class UsageSummary:
     ips_last_7_days: int
 
 
+@dataclass
+class RefreshRecord:
+    """A refresh token joined to the access-token row it refreshes."""
+
+    token_id: int
+    client_id: str
+    scope: str
+    grant_expires_at: str
+    owner_id: int
+    revoked_at: str | None
+
+
+def _authorization_from_row(row: sqlite3.Row) -> AuthorizationRecord:
+    data = dict(row)
+    data["redirect_uri_explicit"] = bool(data["redirect_uri_explicit"])
+    return AuthorizationRecord(**data)
+
+
 class AccountExistsError(Exception):
     """Raised when creating an account with a username that's already taken."""
 
@@ -214,6 +302,10 @@ class AccountNotFoundError(Exception):
 
 class TokenNotOwnedError(Exception):
     """Raised when revoking a token that doesn't exist or isn't owned by the requester."""
+
+
+class AuthorizationNotFoundError(Exception):
+    """Raised when completing an authorisation that doesn't exist or has expired."""
 
 
 class TokenStore:
@@ -362,6 +454,247 @@ class TokenStore:
 
     def validate(self, raw_token: str) -> bool:
         return self.resolve(raw_token) is not None
+
+    def get_token(self, token_id: int) -> TokenRecord | None:
+        """Return a token row by id, whatever its revoked/expired state."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                _TOKEN_SELECT + " WHERE tokens.id = ?", (token_id,)
+            ).fetchone()
+        return TokenRecord(**dict(row)) if row else None
+
+    def rotate_token(self, token_id: int, expires_at: str | None) -> str:
+        """Give an existing token row a new secret and expiry, and return it.
+
+        Used when an OAuth refresh mints a new access token: keeping the row
+        means the admin UI shows one entry per connector sign-in rather than
+        one per hourly refresh, and the usage log stays attributed to it.
+        """
+        raw_token = secrets.token_urlsafe(32)
+        with closing(self._connect()) as conn:
+            cursor = conn.execute(
+                "UPDATE tokens SET token_hash = ?, expires_at = ? "
+                "WHERE id = ? AND revoked_at IS NULL",
+                (_hash_token(raw_token), expires_at, token_id),
+            )
+            conn.commit()
+        if cursor.rowcount == 0:
+            raise TokenNotOwnedError(token_id)
+        return raw_token
+
+    # ── OAuth clients ───────────────────────────────────────────
+
+    def save_oauth_client(self, client_id: str, client_json: str) -> None:
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT INTO oauth_clients (client_id, client_json, created_at) "
+                "VALUES (?, ?, ?) ON CONFLICT(client_id) DO UPDATE SET "
+                "client_json = excluded.client_json",
+                (client_id, client_json, _now()),
+            )
+            conn.commit()
+
+    def get_oauth_client(self, client_id: str) -> str | None:
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT client_json FROM oauth_clients WHERE client_id = ?",
+                (client_id,),
+            ).fetchone()
+        return row["client_json"] if row else None
+
+    # ── OAuth authorisations ────────────────────────────────────
+
+    def create_authorization(
+        self,
+        *,
+        client_id: str,
+        redirect_uri: str,
+        redirect_uri_explicit: bool,
+        code_challenge: str,
+        state: str | None,
+        scope: str,
+        resource: str | None,
+        expires_at: str,
+    ) -> str:
+        """Start an authorisation and return its unguessable transaction id."""
+        txn_id = secrets.token_urlsafe(32)
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT INTO oauth_authorizations (id, client_id, redirect_uri, "
+                "redirect_uri_explicit, code_challenge, state, scope, resource, "
+                "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    txn_id,
+                    client_id,
+                    redirect_uri,
+                    int(redirect_uri_explicit),
+                    code_challenge,
+                    state,
+                    scope,
+                    resource,
+                    _now(),
+                    expires_at,
+                ),
+            )
+            conn.commit()
+        return txn_id
+
+    def get_authorization(self, txn_id: str) -> AuthorizationRecord | None:
+        """Return a live authorisation. Expired rows are swept and read as None."""
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "DELETE FROM oauth_authorizations WHERE expires_at <= ?", (_now(),)
+            )
+            conn.commit()
+            row = conn.execute(
+                f"SELECT {_AUTHORIZATION_COLUMNS} FROM oauth_authorizations "
+                "WHERE id = ?",
+                (txn_id,),
+            ).fetchone()
+        return _authorization_from_row(row) if row else None
+
+    def fail_authorization_attempt(self, txn_id: str, max_attempts: int) -> int:
+        """Count a failed sign-in. Returns attempts left; 0 deletes the row."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT attempts FROM oauth_authorizations WHERE id = ?", (txn_id,)
+            ).fetchone()
+            if row is None:
+                return 0
+            attempts = row["attempts"] + 1
+            if attempts >= max_attempts:
+                conn.execute("DELETE FROM oauth_authorizations WHERE id = ?", (txn_id,))
+                conn.commit()
+                return 0
+            conn.execute(
+                "UPDATE oauth_authorizations SET attempts = ? WHERE id = ?",
+                (attempts, txn_id),
+            )
+            conn.commit()
+            return max_attempts - attempts
+
+    def complete_authorization(self, txn_id: str, owner_id: int) -> str:
+        """Bind a signed-in account to the authorisation and return its code."""
+        raw_code = secrets.token_urlsafe(32)
+        with closing(self._connect()) as conn:
+            cursor = conn.execute(
+                "UPDATE oauth_authorizations SET owner_id = ?, code_hash = ? "
+                "WHERE id = ?",
+                (owner_id, _hash_token(raw_code), txn_id),
+            )
+            conn.commit()
+        if cursor.rowcount == 0:
+            raise AuthorizationNotFoundError(txn_id)
+        return raw_code
+
+    def consume_authorization_code(self, raw_code: str) -> AuthorizationRecord | None:
+        """Return the authorisation for a code and delete it — codes are single use."""
+        code_hash = _hash_token(raw_code)
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                f"SELECT {_AUTHORIZATION_COLUMNS} FROM oauth_authorizations "
+                "WHERE code_hash = ?",
+                (code_hash,),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "DELETE FROM oauth_authorizations WHERE code_hash = ?", (code_hash,)
+            )
+            conn.commit()
+        return _authorization_from_row(row)
+
+    def delete_authorization(self, txn_id: str) -> None:
+        with closing(self._connect()) as conn:
+            conn.execute("DELETE FROM oauth_authorizations WHERE id = ?", (txn_id,))
+            conn.commit()
+
+    # ── OAuth refresh tokens ────────────────────────────────────
+
+    def create_refresh_token(
+        self,
+        *,
+        token_id: int,
+        client_id: str,
+        scope: str,
+        grant_expires_at: str,
+    ) -> str:
+        """Issue a refresh token for an access-token row and return it."""
+        raw_token = secrets.token_urlsafe(32)
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT INTO oauth_refresh_tokens (token_hash, token_id, client_id, "
+                "scope, grant_expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    _hash_token(raw_token),
+                    token_id,
+                    client_id,
+                    scope,
+                    grant_expires_at,
+                    _now(),
+                ),
+            )
+            conn.commit()
+        return raw_token
+
+    def get_refresh_token(self, raw_token: str) -> RefreshRecord | None:
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                _REFRESH_SELECT + " WHERE oauth_refresh_tokens.token_hash = ?",
+                (_hash_token(raw_token),),
+            ).fetchone()
+        return RefreshRecord(**dict(row)) if row else None
+
+    def delete_refresh_token(self, raw_token: str) -> None:
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "DELETE FROM oauth_refresh_tokens WHERE token_hash = ?",
+                (_hash_token(raw_token),),
+            )
+            conn.commit()
+
+    def get_oauth_client_id_for_token(self, token_id: int) -> str | None:
+        """The OAuth client a token row was issued to, or None if hand-made."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT client_id FROM oauth_refresh_tokens WHERE token_id = ?",
+                (token_id,),
+            ).fetchone()
+        return row["client_id"] if row else None
+
+    def revoke_token_by_value(self, raw_token: str) -> None:
+        """Revoke the token row holding this secret and drop its refresh tokens."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT id FROM tokens WHERE token_hash = ?",
+                (_hash_token(raw_token),),
+            ).fetchone()
+            if row is None:
+                return
+            conn.execute(
+                "UPDATE tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                (_now(), row["id"]),
+            )
+            conn.execute(
+                "DELETE FROM oauth_refresh_tokens WHERE token_id = ?", (row["id"],)
+            )
+            conn.commit()
+
+    def revoke_by_refresh_token(self, raw_token: str) -> None:
+        """Revoke the access token a refresh token belongs to, and itself."""
+        record = self.get_refresh_token(raw_token)
+        if record is None:
+            return
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "UPDATE tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                (_now(), record.token_id),
+            )
+            conn.execute(
+                "DELETE FROM oauth_refresh_tokens WHERE token_id = ?",
+                (record.token_id,),
+            )
+            conn.commit()
 
     # ── usage log ─────────────────────────────────────────────────────────
 

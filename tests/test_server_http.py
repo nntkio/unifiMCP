@@ -357,3 +357,32 @@ class TestUsageLogMiddleware:
             client.delete("/mcp", headers=_mcp_headers(raw_token))
 
         assert store.count_usage(UsageFilter()) == 0
+
+
+class TestChallengeWithoutPublicUrl:
+    def test_401_carries_a_bare_bearer_challenge(self, mcp_server, token_store):
+        store, _ = token_store
+        app = build_app(mcp_server, store, AsyncMock())
+
+        with TestClient(app) as client:
+            response = client.post("/mcp", json={})
+
+        assert response.headers["www-authenticate"] == "Bearer"
+
+    def test_oauth_routes_are_absent(self, mcp_server, token_store):
+        store, _ = token_store
+        app = build_app(mcp_server, store, AsyncMock())
+
+        with TestClient(app) as client:
+            response = client.get("/.well-known/oauth-authorization-server")
+
+        assert response.status_code == 404
+
+    def test_unknown_path_still_needs_no_token(self, mcp_server, token_store):
+        store, _ = token_store
+        app = build_app(mcp_server, store, AsyncMock())
+
+        with TestClient(app) as client:
+            response = client.get("/nope")
+
+        assert response.status_code == 404

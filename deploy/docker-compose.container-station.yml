@@ -25,6 +25,8 @@ services:
       MCP_HTTP_HOST: "0.0.0.0"
       MCP_HTTP_PORT: "8765"
       TOKEN_DB_PATH: "/data/tokens.db"
+      # Only for Claude custom connectors; delete if the service stays on the LAN.
+      MCP_PUBLIC_URL: "<https://unifi-mcp.example.com>"
     ports:
       - "8765:8765"
     volumes:
@@ -58,6 +60,16 @@ services:
       - "8766:8766"
     volumes:
       - unifi-mcp-data:/data
+    restart: unless-stopped
+
+  # Publishes the MCP service publicly without opening a NAS port. Only needed
+  # for Claude custom connectors; delete this service for a LAN-only setup.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: unifi-mcp-tunnel
+    command: tunnel --no-autoupdate run --token <tunnel-token>
+    depends_on:
+      - unifi-mcp
     restart: unless-stopped
 
 volumes:

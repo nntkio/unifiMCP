@@ -378,35 +378,44 @@ That is equivalent to this entry in `.mcp.json` or the settings file:
 }
 ```
 
-Claude Desktop's config file only launches local commands, so it cannot
-send a bearer header to a remote URL by itself. Bridge it with the
-`mcp-remote` package, which runs as a local stdio server and forwards to the
-HTTP endpoint:
+### Adding the server as a Claude connector
 
-```json
-{
-  "mcpServers": {
-    "unifi": {
-      "command": "npx",
-      "args": [
-        "-y", "mcp-remote",
-        "http://<host>:8765/mcp",
-        "--header", "Authorization:${AUTH_HEADER}"
-      ],
-      "env": {
-        "AUTH_HEADER": "Bearer <token>"
-      }
-    }
-  }
-}
-```
+Claude Desktop, claude.ai, and Claude mobile add remote servers through
+**Settings → Connectors → Add custom connector**, which speaks OAuth rather
+than static bearer tokens. Connector traffic also originates from Anthropic's
+servers, not from your machine, so the endpoint has to be reachable over
+public HTTPS. Publish it first (see
+[qnap-deployment.md](qnap-deployment.md#publishing-the-mcp-endpoint-with-a-cloudflare-tunnel))
+and set `MCP_PUBLIC_URL` to the public origin, which turns on the OAuth
+endpoints. Then:
 
-Passing the header value through an environment variable, with no space
-after the colon, is the form `mcp-remote` recommends because some Claude
-Desktop builds mis-split arguments containing spaces. Check the `mcp-remote`
-documentation for its current flags. Claude Desktop's Connectors settings
-can also add remote servers, but that path is built around OAuth rather
-than a static bearer token.
+1. Open **Settings → Connectors → Add custom connector**.
+2. Give it a name (`UniFi`) and the URL ending in `/mcp`, for example
+   `https://unifi-mcp.seeg.io/mcp`. Claude probes the URL and marks the
+   authentication it detects.
+3. Leave Authentication on **Sign in now** and the OAuth client on
+   **Register automatically**, then select **Add**.
+4. Select **Connect**. A browser tab opens the sign-in page served by the MCP
+   service itself. Sign in with a token-admin account — not root, which has
+   no database row and is rejected here for the same reason it can never own
+   a token. The tab returns to Claude.
+5. Enable the connector per chat from the **+** menu under **Connectors**.
+   Individual tools can be blocked under **Customize → Connectors**.
+6. To end the session, revoke the `OAuth · Claude` token in the admin UI, or
+   remove the connector in Claude. Authentication settings cannot be edited
+   after a connector is added; remove and re-add to change them.
+
+The access token Claude receives is an ordinary row in the token database.
+It appears in the admin UI under the account that signed in, is revocable
+there, and every call it makes lands in the usage log. It lasts an hour and
+Claude refreshes it automatically; refreshing rotates the secret on the same
+row, so one sign-in stays one row. The whole grant expires after 30 days,
+after which Claude asks the user to sign in again.
+
+Claude Code does not use this flow — it sends a static bearer token, which
+keeps working unchanged. Clients with no connector support can still bridge
+to the HTTP endpoint with the `mcp-remote` package, which runs as a local
+stdio server and forwards to the URL with a header you supply.
 
 Behind a TLS reverse proxy, always use the `https://` URL. With HTTP-to-HTTPS
 redirection on, an `http://` request gets a 301, and MCP clients generally

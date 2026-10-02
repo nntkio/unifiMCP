@@ -41,6 +41,8 @@ src/
     server/              # MCP server, split by domain
       __init__.py         # Tool registry, dispatch (list_tools/call_tool), client lifecycle, main
       _http.py             # Streamable HTTP transport: bearer auth + usage-log middleware
+      _oauth.py            # OAuth authorization server: provider, sign-in page, routes
+      templates/           # oauth_login.html, oauth_error.html (sign-in and consent)
       _schema.py           # ToolSpec dataclass + shared property schema constants
       _formatting.py        # Formatting helpers shared across domains (bytes, uptime, client lines)
       _devices.py            # Device tool handlers/formatters + cmd/devmgr commands
@@ -64,6 +66,7 @@ tests/
   test_tokens_store.py        # TokenStore: accounts, tokens, usage log
   test_admin_app.py           # Token-admin routes and rendered pages
   test_server_http.py         # HTTP transport: auth + usage-log middleware
+  test_server_oauth.py        # OAuth: metadata, sign-in, token exchange, refresh
   test_server_registry.py     # list_tools/call_tool dispatch + client lifecycle
   test_server_formatting.py   # Shared formatting helpers
   test_server_<domain>.py     # Server tests, split by the same domains as server/
